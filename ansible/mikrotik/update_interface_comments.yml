@@ -21,10 +21,6 @@
       tls: false
       validate_certs: false
 
-  vars:
-    comment_prefix: "{{ comment_prefix | default('LLDP') }}"
-    skip_interfaces: "{{ skip_interfaces | default(['lo', 'bridge', 'vlan']) }}"
-
   tasks:
     - name: Fetch discovery neighbours
       community.routeros.api:
@@ -61,10 +57,10 @@
         find:
           name: "{{ item['name'] }}"
         values:
-          comment: "{{ comment_prefix }}: {{ neighbour_map[item['name']] }}"
+          comment: "{{ comment_prefix | default('LLDP') }}: {{ neighbour_map[item['name']] }}"
       loop: "{{ interfaces.result }}"
       loop_control:
         label: "{{ item['name'] }}"
       when:
         - item['name'] in (neighbour_map | default({}))
-        - item['name'] | regex_search('^(' + skip_interfaces | join('|') + ')') == none
+        - item['name'] | regex_search('^(' + (skip_interfaces | default(['lo', 'bridge', 'vlan'])) | join('|') + ')') == none
