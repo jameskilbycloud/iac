@@ -1,4 +1,14 @@
 ---
+- name: Ensure controller has librouteros
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Install librouteros pip package
+      ansible.builtin.pip:
+        name: librouteros
+        state: present
+
 - name: Update Mikrotik interface comments from LLDP/discovery neighbours
   hosts: mikrotik
   gather_facts: false
