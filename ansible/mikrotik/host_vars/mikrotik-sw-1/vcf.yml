@@ -113,6 +113,20 @@ vlans:
       range_end: "192.168.105.200"
       lease_time: "1d"
 
+  - id: 106
+    name: NSX-Edge-Uplink-1
+    network: "192.168.106.0/24"
+    tagged_groups:
+      - uplink
+      - hosts
+
+  - id: 107
+    name: NSX-Edge-Uplink-2
+    network: "192.168.107.0/24"
+    tagged_groups:
+      - uplink
+      - hosts
+
   - id: 2
     name: DMZ
     network: "192.168.2.0/24"
@@ -131,6 +145,7 @@ vlans:
     mtu: 9212
     tagged_groups:
       - uplink
+      - hosts
       - storage
 
 # BGP
