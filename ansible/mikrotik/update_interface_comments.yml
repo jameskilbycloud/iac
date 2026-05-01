@@ -17,8 +17,8 @@
 
   tasks:
     - name: Fetch discovery neighbours
-      community.routeros.api_info:
-        path: ip neighbor
+      community.routeros.api:
+        path: "ip neighbor"
       register: neighbours
 
     - name: Fetch interfaces
@@ -38,7 +38,7 @@
       vars:
         _items: >-
           {{
-            neighbours.result
+            neighbours.msg
             | selectattr('interface', 'defined')
             | selectattr('identity', 'defined')
             | rejectattr('identity', 'equalto', '')
