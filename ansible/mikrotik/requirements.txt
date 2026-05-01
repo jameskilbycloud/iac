@@ -1,0 +1,5 @@
+# Python dependencies for MikroTik Ansible modules
+# Install into Ansible's Python environment:
+#   /opt/homebrew/Cellar/ansible/*/libexec/bin/python -m pip install -r requirements.txt
+
+librouteros>=3.2.1
