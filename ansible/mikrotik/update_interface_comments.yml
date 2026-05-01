@@ -63,4 +63,16 @@
         label: "{{ item['name'] }}"
       when:
         - item['name'] in (neighbour_map | default({}))
+        - item['name'] not in (static_interface_comments | default({}))
         - item['name'] | regex_search('^(' + (skip_interfaces | default(['lo', 'bridge', 'vlan'])) | join('|') + ')') == none
+
+    - name: Apply static interface comments
+      community.routeros.api_find_and_modify:
+        path: interface
+        find:
+          name: "{{ item.key }}"
+        values:
+          comment: "{{ item.value }}"
+      loop: "{{ static_interface_comments | default({}) | dict2items }}"
+      loop_control:
+        label: "{{ item.key }} -> {{ item.value }}"

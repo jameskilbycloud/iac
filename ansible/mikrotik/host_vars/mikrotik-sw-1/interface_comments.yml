@@ -1,0 +1,16 @@
+---
+# Static interface comments — applied after the LLDP pass and win on conflicts.
+# Use for devices that don't advertise LLDP/CDP (e.g. TrueNAS SCALE) or where
+# you want a friendlier label than the device's broadcast hostname.
+#
+# Format: <interface-name>: "<comment text>"
+# Comments here are written verbatim — no prefix is added.
+
+static_interface_comments:
+  # Storage (no LLDP advertisement)
+  qsfp28-1-4: "StoreServ1"
+  qsfp28-2-4: "StoreServ2"
+
+  # Workstations
+  qsfp28-2-2: "Z840-1"
+  qsfp28-2-3: "Z840-2"
