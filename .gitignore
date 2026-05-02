@@ -51,3 +51,4 @@ scripts/truenas/shares/shares.csv
 # Gitleaks secret scanning reports
 gitleaks-report.json
 results.sarif
+ansible/holodeck-9.0.2/files/holorouter-9.0.2.0424.ova
