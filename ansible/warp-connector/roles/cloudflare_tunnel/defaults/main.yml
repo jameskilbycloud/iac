@@ -1,0 +1,9 @@
+# ---------------------------------------------------------------------------
+# Role defaults — override in group_vars or host_vars as needed
+# ---------------------------------------------------------------------------
+
+# Cloudflare package repo GPG key destination
+cloudflared_gpg_keyring: /usr/share/keyrings/cloudflare-main.gpg
+
+# cloudflared systemd service name
+cloudflared_service: cloudflared

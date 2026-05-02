@@ -1,16 +1,16 @@
 ---
 # ---------------------------------------------------------------------------
-# Cloudflare WARP Connector — deploy playbook
+# Cloudflare Tunnel (cloudflared) — deploy playbook
 #
 # Runs against every host in the Semaphore inventory (hosts: all).
 # Limit via Semaphore's "Limit" field if the inventory has more than one host.
 #
 # Variables (pass via Semaphore Variable Group or -e on CLI):
-#   warp_connector_token   Token from Zero Trust → Networks → WARP Connector
-#                          (mark as secret in Semaphore)
+#   cloudflare_tunnel_token   Token from Zero Trust → Networks → Tunnels
+#                             (mark as secret in Semaphore)
 # ---------------------------------------------------------------------------
 
-- name: Deploy Cloudflare WARP Connector
+- name: Deploy Cloudflare Tunnel
   hosts: all
   become: true
   gather_facts: true
@@ -19,11 +19,11 @@
     - name: Verify token is set
       ansible.builtin.assert:
         that:
-          - warp_connector_token is defined
-          - warp_connector_token | length > 0
+          - cloudflare_tunnel_token is defined
+          - cloudflare_tunnel_token | length > 0
         fail_msg: >
-          warp_connector_token is not set. Pass it via Semaphore Variable Group
-          (marked secret) or with -e warp_connector_token=...
+          cloudflare_tunnel_token is not set. Pass it via Semaphore Variable Group
+          (marked secret) or with -e cloudflare_tunnel_token=...
 
     - name: Verify Ubuntu is the target OS
       ansible.builtin.assert:
@@ -31,4 +31,4 @@
         fail_msg: "This playbook targets Ubuntu. Found: {{ ansible_distribution }}"
 
   roles:
-    - warp_connector
+    - cloudflare_tunnel
