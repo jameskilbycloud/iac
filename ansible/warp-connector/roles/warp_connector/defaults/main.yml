@@ -7,3 +7,9 @@ warp_gpg_keyring: /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
 
 # Enable IPv4 forwarding so the connector can route traffic for the whole subnet
 warp_ip_forward: true
+
+# Cloudflare WARP repo codename override — pin to latest supported LTS when
+# running on a release that Cloudflare hasn't published packages for yet
+# (e.g. Ubuntu 25.04 "questing" → use "noble" until CF publishes questing).
+# Set to "" to use ansible_distribution_release automatically.
+warp_repo_release: noble
