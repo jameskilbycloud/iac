@@ -1,0 +1,82 @@
+---
+# =============================================================================
+# Holodeck 9.0.2 - Global Variables
+# =============================================================================
+# All sensitive values (passwords, API tokens) should be stored in Ansible
+# Vault. Run: ansible-vault encrypt_string 'value' --name 'variable_name'
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Physical ESXi Host (the hypervisor running the nested Holodeck lab)
+# -----------------------------------------------------------------------------
+esxi_host: "esxi01.lab.example.com"
+esxi_username: "root"
+esxi_password: "{{ vault_esxi_password }}"   # store in vault.yml
+esxi_validate_certs: false
+esxi_datacenter: "ha-datacenter"             # default for standalone ESXi
+esxi_datastore: "datastore1"                 # target datastore for OVAs/VMs
+
+# -----------------------------------------------------------------------------
+# Holodeck version
+# -----------------------------------------------------------------------------
+holodeck_version: "9.0.2"
+
+# -----------------------------------------------------------------------------
+# Holorouter OVA
+# Download from: https://github.com/vmware/Holodeck/releases
+# Place the OVA on the Ansible control node before running this playbook.
+# -----------------------------------------------------------------------------
+holorouter_ova_path: "{{ playbook_dir }}/files/holorouter-{{ holodeck_version }}.ova"
+holorouter_vm_name: "HoloRouter"
+holorouter_vm_folder: "/"
+holorouter_network: "VM Network"            # Management network on physical ESXi
+holorouter_ip: "192.168.1.10"              # Static IP for Holorouter management
+holorouter_netmask: "255.255.255.0"
+holorouter_gateway: "192.168.1.1"
+holorouter_dns: "192.168.1.1"
+holorouter_hostname: "holorouter.lab.example.com"
+holorouter_username: "root"
+holorouter_password: "{{ vault_holorouter_password }}"
+holorouter_ssh_port: 22
+holorouter_boot_wait_seconds: 120
+
+# -----------------------------------------------------------------------------
+# VLC (Virtual Lab Cloud) Networking – nested lab fabric
+# Must be a /20 CIDR block; Holodeck subdivides it internally.
+# Defaults match the Holodeck 9.0 out-of-the-box addressing scheme.
+# -----------------------------------------------------------------------------
+vlc_vswitch_name: "VLC-A"
+vlc_portgroup_name: "VLC-A-PG"
+vlc_mtu: 9000
+vlc_cidr: "10.0.0.0/20"       # Custom /20 passed to New-HoloDeckInstance
+vlc_vlan_range_start: 1000    # First VLAN in the nested lab range
+
+# -----------------------------------------------------------------------------
+# Holodeck Instance Configuration
+# These become parameters for New-HoloDeckInstance (run on Holorouter via SSH)
+# -----------------------------------------------------------------------------
+holodeck_instance_id: "1"          # Unique integer; allows multiple instances
+holodeck_site: "a"                 # 'a' for single-site; add 'b' for dual-site
+holodeck_vsan_mode: "ESA"          # 'ESA' or 'OSA'
+holodeck_depot_type: "Online"      # 'Online' or 'Offline'
+
+# Optional feature flags (set to true to deploy)
+holodeck_deploy_vcf_automation: false
+holodeck_deploy_supervisor: false
+
+# Broadcom credentials – required for online depot downloads
+# Obtain a Broadcom API token at: https://support.broadcom.com/
+broadcom_api_token: "{{ vault_broadcom_api_token }}"
+
+# -----------------------------------------------------------------------------
+# Hardware sizing reference (from official Holodeck 9.0 documentation)
+# Verify your physical host meets these minimums before deploying.
+#
+#   Single-site (default):  24 pCPU cores | 384 GB RAM | 2 TB storage
+#   Dual-site:              32 pCPU cores |   1 TB RAM | 4 TB storage
+#   VCF Automation add-on:  +8 vCPU, +64 GB RAM (vSAN ESA minimum 32 vCPUs)
+# -----------------------------------------------------------------------------
+# Minimum physical resource thresholds (used in preflight checks)
+min_cpu_cores: 24
+min_ram_gb: 384
+min_free_storage_gb: 2000

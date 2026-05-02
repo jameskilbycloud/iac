@@ -1,0 +1,13 @@
+# =============================================================================
+# Holodeck 9.0.2 – Vault Variables (EXAMPLE – DO NOT COMMIT WITH REAL VALUES)
+# =============================================================================
+# Copy this file to vault.yml and encrypt it:
+#   ansible-vault encrypt vault.yml
+#
+# To edit later:
+#   ansible-vault edit vault.yml
+# =============================================================================
+
+vault_esxi_password: "change-me-esxi-root-password"
+vault_holorouter_password: "change-me-holorouter-root-password"
+vault_broadcom_api_token: "change-me-broadcom-api-token"

@@ -1,0 +1,267 @@
+---
+# =============================================================================
+# Holodeck 9.0.2 – Full Deployment Playbook
+# =============================================================================
+# Deploys a VMware Holodeck 9.0.2 nested VCF lab on a physical ESXi host.
+#
+# High-level flow:
+#   Play 1 – Preflight:   verify physical host has enough CPU/RAM/storage
+#   Play 2 – Networking:  create VLC vSwitch & port group on the ESXi host
+#   Play 3 – Holorouter:  deploy the Holorouter OVA and wait for it to boot
+#   Play 4 – VCF Lab:     SSH into Holorouter and run New-HoloDeckInstance
+#
+# Prerequisites:
+#   - Ansible >= 2.15
+#   - community.vmware collection  (ansible-galaxy collection install community.vmware)
+#   - Holorouter OVA placed at:    files/holorouter-9.0.2.ova
+#   - ESXi host meets hardware minimums (see group_vars/all.yml)
+#   - Ansible Vault file with vault_esxi_password, vault_holorouter_password,
+#     and vault_broadcom_api_token  (ansible-vault create vault.yml)
+#
+# Usage:
+#   ansible-playbook -i inventory.ini deploy-holodeck.yml --ask-vault-pass
+#   ansible-playbook -i inventory.ini deploy-holodeck.yml --vault-password-file .vault_pass
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Play 1 – Preflight Checks
+# ---------------------------------------------------------------------------
+- name: Preflight – verify ESXi host resources
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - community.vmware
+
+  vars_files:
+    - vault.yml   # Ansible Vault – created separately; never commit plaintext
+
+  tasks:
+    - name: Gather ESXi host facts
+      community.vmware.vmware_host_facts:
+        hostname: "{{ esxi_host }}"
+        username: "{{ esxi_username }}"
+        password: "{{ esxi_password }}"
+        validate_certs: "{{ esxi_validate_certs }}"
+        esxi_hostname: "{{ esxi_host }}"
+      register: host_facts
+
+    - name: Show host hardware summary
+      ansible.builtin.debug:
+        msg:
+          - "Host:       {{ esxi_host }}"
+          - "CPU cores:  {{ host_facts.ansible_facts.ansible_processor_vcpus | default('unknown') }}"
+          - "RAM (GB):   {{ (host_facts.ansible_facts.ansible_memtotal_mb | default(0) / 1024) | round(1) }}"
+
+    - name: Assert minimum CPU cores
+      ansible.builtin.assert:
+        that:
+          - (host_facts.ansible_facts.ansible_processor_vcpus | int) >= min_cpu_cores
+        fail_msg: >
+          Host has {{ host_facts.ansible_facts.ansible_processor_vcpus }} CPU cores;
+          Holodeck 9.0.2 single-site requires at least {{ min_cpu_cores }}.
+        success_msg: "CPU check passed."
+
+    - name: Assert minimum RAM
+      ansible.builtin.assert:
+        that:
+          - (host_facts.ansible_facts.ansible_memtotal_mb | int / 1024) >= min_ram_gb
+        fail_msg: >
+          Host has {{ (host_facts.ansible_facts.ansible_memtotal_mb | int / 1024) | round(1) }} GB RAM;
+          Holodeck 9.0.2 single-site requires at least {{ min_ram_gb }} GB.
+        success_msg: "RAM check passed."
+
+    - name: Gather datastore facts
+      community.vmware.vmware_datastore_info:
+        hostname: "{{ esxi_host }}"
+        username: "{{ esxi_username }}"
+        password: "{{ esxi_password }}"
+        validate_certs: "{{ esxi_validate_certs }}"
+        name: "{{ esxi_datastore }}"
+      register: datastore_info
+
+    - name: Assert minimum free storage
+      ansible.builtin.assert:
+        that:
+          - (datastore_info.datastores[0].freeSpace | int / 1073741824) >= min_free_storage_gb
+        fail_msg: >
+          Datastore '{{ esxi_datastore }}' has
+          {{ (datastore_info.datastores[0].freeSpace | int / 1073741824) | round(1) }} GB free;
+          Holodeck 9.0.2 single-site requires at least {{ min_free_storage_gb }} GB.
+        success_msg: "Storage check passed."
+
+    - name: Verify Holorouter OVA exists on control node
+      ansible.builtin.stat:
+        path: "{{ holorouter_ova_path }}"
+      register: ova_stat
+
+    - name: Fail if Holorouter OVA is missing
+      ansible.builtin.fail:
+        msg: >
+          Holorouter OVA not found at {{ holorouter_ova_path }}.
+          Download it from https://github.com/vmware/Holodeck/releases (tag {{ holodeck_version }})
+          and place it in the files/ directory.
+      when: not ova_stat.stat.exists
+
+
+# ---------------------------------------------------------------------------
+# Play 2 – VLC Networking
+# ---------------------------------------------------------------------------
+- name: Networking – create VLC vSwitch and port group on ESXi host
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - community.vmware
+
+  vars_files:
+    - vault.yml
+
+  tasks:
+    - name: Create VLC vSwitch (no uplinks, jumbo frames)
+      community.vmware.vmware_host_vss:
+        hostname: "{{ esxi_host }}"
+        username: "{{ esxi_username }}"
+        password: "{{ esxi_password }}"
+        validate_certs: "{{ esxi_validate_certs }}"
+        esxi_hostname: "{{ esxi_host }}"
+        switch_name: "{{ vlc_vswitch_name }}"
+        mtu: "{{ vlc_mtu }}"
+        nics: []
+        state: present
+
+    - name: Create VLC port group with promiscuous mode
+      community.vmware.vmware_portgroup:
+        hostname: "{{ esxi_host }}"
+        username: "{{ esxi_username }}"
+        password: "{{ esxi_password }}"
+        validate_certs: "{{ esxi_validate_certs }}"
+        esxi_hostname: "{{ esxi_host }}"
+        switch_name: "{{ vlc_vswitch_name }}"
+        portgroup_name: "{{ vlc_portgroup_name }}"
+        vlan_id: 0
+        promiscuous_mode: true
+        allow_forged_transmits: true
+        allow_mac_changes: true
+        state: present
+
+
+# ---------------------------------------------------------------------------
+# Play 3 – Deploy Holorouter
+# ---------------------------------------------------------------------------
+- name: Holorouter – deploy OVA and wait for boot
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - community.vmware
+
+  vars_files:
+    - vault.yml
+
+  tasks:
+    - name: Deploy Holorouter OVA
+      community.vmware.vmware_deploy_ovf:
+        hostname: "{{ esxi_host }}"
+        username: "{{ esxi_username }}"
+        password: "{{ esxi_password }}"
+        validate_certs: "{{ esxi_validate_certs }}"
+        datacenter: "{{ esxi_datacenter }}"
+        datastore: "{{ esxi_datastore }}"
+        name: "{{ holorouter_vm_name }}"
+        ovf: "{{ holorouter_ova_path }}"
+        networks:
+          "VM Network": "{{ holorouter_network }}"
+        properties:
+          guestinfo.hostname: "{{ holorouter_hostname }}"
+          guestinfo.ipaddress: "{{ holorouter_ip }}"
+          guestinfo.netmask: "{{ holorouter_netmask }}"
+          guestinfo.gateway: "{{ holorouter_gateway }}"
+          guestinfo.dns: "{{ holorouter_dns }}"
+          guestinfo.password: "{{ holorouter_password }}"
+        power_on: true
+        wait_for_ip_address: true
+      register: holorouter_deploy
+
+    - name: Show Holorouter deploy result
+      ansible.builtin.debug:
+        msg: "Holorouter deployed – IP: {{ holorouter_ip }}"
+
+    - name: Wait for Holorouter SSH to become available
+      ansible.builtin.wait_for:
+        host: "{{ holorouter_ip }}"
+        port: "{{ holorouter_ssh_port }}"
+        delay: 30
+        timeout: "{{ holorouter_boot_wait_seconds + 30 }}"
+        state: started
+      delegate_to: localhost
+
+
+# ---------------------------------------------------------------------------
+# Play 4 – Bootstrap VCF Nested Lab via Holorouter
+# ---------------------------------------------------------------------------
+- name: VCF Lab – run New-HoloDeckInstance on Holorouter
+  hosts: holorouter
+  gather_facts: false
+
+  vars_files:
+    - vault.yml
+
+  vars:
+    ansible_user: "{{ holorouter_username }}"
+    ansible_password: "{{ holorouter_password }}"
+    ansible_host: "{{ holorouter_ip }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+  tasks:
+    - name: Verify PowerShell (pwsh) is available on Holorouter
+      ansible.builtin.command: pwsh --version
+      register: pwsh_check
+      changed_when: false
+
+    - name: Show PowerShell version
+      ansible.builtin.debug:
+        msg: "{{ pwsh_check.stdout }}"
+
+    - name: Build New-HoloDeckInstance argument string
+      ansible.builtin.set_fact:
+        holodeck_ps_args: >-
+          -InstanceID {{ holodeck_instance_id }}
+          -Site {{ holodeck_site }}
+          -vSANMode {{ holodeck_vsan_mode }}
+          -CIDR {{ vlc_cidr }}
+          -VLANRangeStart {{ vlc_vlan_range_start }}
+          -DepotType {{ holodeck_depot_type }}
+          {% if holodeck_depot_type == 'Online' %}-BroadcomAPIToken "{{ broadcom_api_token }}"{% endif %}
+          {% if holodeck_deploy_vcf_automation %}-DeployVcfAutomation{% endif %}
+          {% if holodeck_deploy_supervisor %}-DeploySupervisor{% endif %}
+
+    - name: Show deployment command (redacted)
+      ansible.builtin.debug:
+        msg: "New-HoloDeckInstance {{ holodeck_ps_args | regex_replace(broadcom_api_token, '***REDACTED***') }}"
+
+    - name: Run New-HoloDeckInstance (this will take 60–120+ minutes)
+      ansible.builtin.shell: |
+        pwsh -NonInteractive -Command "
+          New-HoloDeckInstance {{ holodeck_ps_args }}
+        "
+      register: holodeck_result
+      async: 10800    # 3-hour async timeout
+      poll: 60        # check every 60 seconds
+      no_log: false   # set to true to suppress output if desired
+
+    - name: Show deployment output (last 100 lines)
+      ansible.builtin.debug:
+        msg: "{{ holodeck_result.stdout_lines[-100:] }}"
+      when: holodeck_result.stdout_lines is defined
+
+    - name: Fail with stderr if deployment failed
+      ansible.builtin.fail:
+        msg: "Holodeck deployment failed:\n{{ holodeck_result.stderr }}"
+      when:
+        - holodeck_result.rc is defined
+        - holodeck_result.rc != 0
+
+    - name: Deployment complete
+      ansible.builtin.debug:
+        msg: >
+          Holodeck {{ holodeck_version }} instance {{ holodeck_instance_id }} deployed
+          successfully. Connect to your nested VCF environment via the Holorouter
+          at {{ holorouter_ip }}.
