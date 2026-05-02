@@ -4,3 +4,6 @@ configs/*.rsc
 
 # Secrets (passwords, API keys, etc.)
 **/secrets.yml
+
+# Claude workspace memory (may contain credentials)
+CLAUDE.md
