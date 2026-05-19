@@ -35,7 +35,7 @@ resource "vsphere_virtual_machine" "cloud_builder" {
       "guestinfo.dns"           = join(",", var.dns_servers)
       "guestinfo.domain"        = var.domain
       "guestinfo.searchpath"    = var.domain
-      "guestinfo.ntp"           = join(",", var.dns_servers)
+      "guestinfo.ntp"           = join(",", var.ntp_servers)
       "guestinfo.rootPassword"  = var.root_password
       "guestinfo.adminPassword" = var.admin_password
     }

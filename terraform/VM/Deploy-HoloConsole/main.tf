@@ -72,9 +72,5 @@ resource "vsphere_virtual_machine" "vm_from_iso" {
     boot_order       = ["cdrom", "disk"]
   }
 
-  clone {
-    template_uuid = null # Required to use ISO instead of cloning
-  }
-
   wait_for_guest_net_timeout = 0
 }
