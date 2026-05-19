@@ -21,7 +21,6 @@ terraform/
 │   └── vSphereVCSetup/         # vCenter and cluster setup
 └── VM/                       # Virtual machine deployments
     ├── Deploy-FAH/            # Folding@Home appliance deployment
-    ├── Deploy-HoloConsole/    # HoloConsole VM deployment
     └── VMCLogs/               # Photon VM for logging
 ```
 
@@ -165,33 +164,6 @@ terraform apply
 - Folding@Home OVA file (local or remote)
 - FAH user account and team ID
 - vSphere environment with appropriate permissions
-
-### 🎮 HoloConsole Deployment (`VM/Deploy-HoloConsole/`)
-
-**Purpose**: Deploys HoloConsole VM from ISO for virtual reality management.
-
-**Features**:
-- Windows Server VM deployment
-- ISO-based installation
-- Configurable hardware specifications
-- vmxnet3 network adapter
-- Thin-provisioned storage
-
-**Specifications**:
-- **CPU**: 2 vCPUs
-- **Memory**: 8GB RAM
-- **Storage**: 60GB thin-provisioned
-- **OS**: Windows Server (guest_id: windows9Server64Guest)
-- **Network**: vmxnet3 adapter
-
-**Usage**:
-```bash
-cd VM/Deploy-HoloConsole/
-# Configure variables in terraform.tfvars
-terraform init
-terraform plan
-terraform apply
-```
 
 ### 📊 VMCLogs Photon VM (`VM/VMCLogs/`)
 

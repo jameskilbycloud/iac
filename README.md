@@ -33,7 +33,6 @@ iac/
 │   │   └── vSphereVCSetup/         # vCenter and cluster setup
 │   └── VM/                     # Virtual machine deployments
 │       ├── Deploy-FAH/         # Folding@Home appliance deployment
-│       ├── Deploy-HoloConsole/ # HoloConsole VM deployment
 │       ├── Deploy-Ubuntu/      # Ubuntu VM deployment from templates
 │       └── VMCLogs/            # Photon VM for logging
 ├── packer/                     # VM template creation
@@ -110,7 +109,6 @@ iac/
 
 - **Deploy-Ubuntu**: Ubuntu VM deployment from templates
 - **Deploy-FAH**: Folding@Home distributed computing appliance
-- **Deploy-HoloConsole**: Virtual reality management VM
 - **VMCLogs**: Photon OS logging and monitoring VM
 
 ### Ansible Automation
