@@ -39,6 +39,8 @@ data "vsphere_network" "management" {
 data "vsphere_network" "esxi_management" {
   name          = var.esxi_management_network
   datacenter_id = data.vsphere_datacenter.dc.id
+
+  depends_on = [module.networking]
 }
 
 # Create VM folder for nested VCF environment
@@ -122,6 +124,7 @@ module "cloud_builder" {
   netmask          = var.cloud_builder_netmask
   gateway          = var.cloud_builder_gateway
   dns_servers      = var.dns_servers
+  ntp_servers      = var.ntp_servers
 
   root_password    = var.cloud_builder_root_password
   admin_password   = var.cloud_builder_admin_password

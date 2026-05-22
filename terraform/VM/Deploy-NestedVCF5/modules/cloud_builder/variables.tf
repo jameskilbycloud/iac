@@ -68,6 +68,11 @@ variable "dns_servers" {
   type        = list(string)
 }
 
+variable "ntp_servers" {
+  description = "List of NTP servers"
+  type        = list(string)
+}
+
 variable "root_password" {
   description = "Root password"
   type        = string
