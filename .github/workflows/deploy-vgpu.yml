@@ -1,0 +1,130 @@
+name: Deploy vGPU
+
+on:
+  workflow_dispatch:
+    inputs:
+      playbook:
+        description: "Which playbook to run"
+        type: choice
+        required: true
+        default: validate
+        options:
+          - validate
+          - drivers
+          - container-toolkit
+          - test-container
+          - full-chain
+      limit:
+        description: "Ansible --limit pattern (host or group). Leave blank for all."
+        type: string
+        required: false
+        default: ""
+      inventory:
+        description: "Inventory path (relative to repo root)"
+        type: string
+        required: true
+        default: "ansible/vGPU/inventory"
+      check_mode:
+        description: "Dry-run with --check (no changes applied)"
+        type: boolean
+        required: false
+        default: false
+      verbosity:
+        description: "Ansible verbosity"
+        type: choice
+        required: false
+        default: "-v"
+        options:
+          - ""
+          - "-v"
+          - "-vv"
+          - "-vvv"
+      extra_vars:
+        description: "Extra Ansible vars (key=val space-separated, or @file.yml)"
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-vgpu-${{ inputs.limit || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: ${{ inputs.playbook }} ${{ inputs.check_mode && '(check)' || '' }}
+    runs-on: [self-hosted]
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: ansible/vGPU
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Show tool versions
+        run: |
+          ansible --version
+          ansible-playbook --version
+
+      - name: Verify inventory exists
+        run: |
+          INV="${{ github.workspace }}/${{ inputs.inventory }}"
+          if [ ! -e "$INV" ]; then
+            echo "::error::Inventory not found at $INV"
+            exit 1
+          fi
+          echo "Using inventory: $INV"
+
+      - name: Resolve playbook list
+        id: plan
+        run: |
+          case "${{ inputs.playbook }}" in
+            validate)         echo "files=validate_nvidia_vGPU.yml" >> "$GITHUB_OUTPUT" ;;
+            drivers)          echo "files=install_nvidia_drivers.yml" >> "$GITHUB_OUTPUT" ;;
+            container-toolkit) echo "files=install_nvidia_containertoolkit.yml" >> "$GITHUB_OUTPUT" ;;
+            test-container)   echo "files=test_nvidia_container.yml" >> "$GITHUB_OUTPUT" ;;
+            full-chain)       echo "files=install_nvidia_drivers.yml install_nvidia_containertoolkit.yml test_nvidia_container.yml validate_nvidia_vGPU.yml" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Run Ansible playbook(s)
+        env:
+          ANSIBLE_FORCE_COLOR: "true"
+          ANSIBLE_HOST_KEY_CHECKING: "false"
+          INVENTORY: ${{ github.workspace }}/${{ inputs.inventory }}
+          LIMIT: ${{ inputs.limit }}
+          CHECK: ${{ inputs.check_mode && '--check --diff' || '' }}
+          VERB: ${{ inputs.verbosity }}
+          EXTRA_VARS: ${{ inputs.extra_vars }}
+          PLAYBOOKS: ${{ steps.plan.outputs.files }}
+        run: |
+          set -euo pipefail
+          LIMIT_ARG=""
+          [ -n "$LIMIT" ] && LIMIT_ARG="--limit $LIMIT"
+          EXTRA_ARG=""
+          [ -n "$EXTRA_VARS" ] && EXTRA_ARG="--extra-vars $EXTRA_VARS"
+
+          for pb in $PLAYBOOKS; do
+            echo "::group::ansible-playbook $pb"
+            ansible-playbook \
+              -i "$INVENTORY" \
+              $LIMIT_ARG \
+              $CHECK \
+              $VERB \
+              $EXTRA_ARG \
+              "$pb"
+            echo "::endgroup::"
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### vGPU deploy"
+            echo ""
+            echo "- Playbook(s): \`${{ steps.plan.outputs.files }}\`"
+            echo "- Inventory: \`${{ inputs.inventory }}\`"
+            echo "- Limit: \`${{ inputs.limit || 'all' }}\`"
+            echo "- Check mode: \`${{ inputs.check_mode }}\`"
+            echo "- Result: \`${{ job.status }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
