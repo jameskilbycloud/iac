@@ -62,21 +62,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install Ansible
         run: |
           set -euo pipefail
+          # Use the runner's system python3 (works on any Ubuntu version).
+          # Ensure venv + pip support is present.
+          if ! python3 -m venv --help >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y python3-venv python3-pip
+          fi
           VENV="$RUNNER_TEMP/ansible-venv"
-          python -m venv "$VENV"
+          python3 -m venv "$VENV"
           "$VENV/bin/pip" install --upgrade pip
           "$VENV/bin/pip" install "ansible-core>=2.16,<2.18" jmespath
           # Persist the venv bin dir for subsequent steps
           echo "VENV_BIN=$VENV/bin" >> "$GITHUB_ENV"
           echo "$VENV/bin" >> "$GITHUB_PATH"
+          "$VENV/bin/ansible" --version
 
       - name: Install required Ansible collections
         run: |
