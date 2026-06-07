@@ -70,21 +70,22 @@ jobs:
       - name: Install Ansible
         run: |
           set -euo pipefail
-          python -m venv "$RUNNER_TEMP/ansible-venv"
-          # shellcheck disable=SC1091
-          . "$RUNNER_TEMP/ansible-venv/bin/activate"
-          pip install --upgrade pip
-          pip install "ansible-core>=2.16,<2.18" jmespath
-          echo "$RUNNER_TEMP/ansible-venv/bin" >> "$GITHUB_PATH"
+          VENV="$RUNNER_TEMP/ansible-venv"
+          python -m venv "$VENV"
+          "$VENV/bin/pip" install --upgrade pip
+          "$VENV/bin/pip" install "ansible-core>=2.16,<2.18" jmespath
+          # Persist the venv bin dir for subsequent steps
+          echo "VENV_BIN=$VENV/bin" >> "$GITHUB_ENV"
+          echo "$VENV/bin" >> "$GITHUB_PATH"
 
       - name: Install required Ansible collections
         run: |
-          ansible-galaxy collection install ansible.posix community.general
+          "$VENV_BIN/ansible-galaxy" collection install ansible.posix community.general
 
       - name: Show tool versions
         run: |
-          ansible --version
-          ansible-playbook --version
+          "$VENV_BIN/ansible" --version
+          "$VENV_BIN/ansible-playbook" --version
 
       - name: Verify inventory exists
         run: |
@@ -125,7 +126,7 @@ jobs:
 
           for pb in $PLAYBOOKS; do
             echo "::group::ansible-playbook $pb"
-            ansible-playbook \
+            "$VENV_BIN/ansible-playbook" \
               -i "$INVENTORY" \
               $LIMIT_ARG \
               $CHECK \
