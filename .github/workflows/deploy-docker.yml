@@ -1,0 +1,125 @@
+name: Deploy Docker
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Ansible --limit pattern (host or group). Leave blank for all."
+        type: string
+        required: false
+        default: ""
+      inventory:
+        description: "Inventory path (relative to repo root)"
+        type: string
+        required: true
+        default: "ansible/docker/inventory"
+      check_mode:
+        description: "Dry-run with --check (no changes applied)"
+        type: boolean
+        required: false
+        default: false
+      allow_reboot:
+        description: "Permit playbook to reboot the host if /var/run/reboot-required exists"
+        type: boolean
+        required: false
+        default: false
+      verbosity:
+        description: "Ansible verbosity"
+        type: choice
+        required: false
+        default: "-v"
+        options:
+          - ""
+          - "-v"
+          - "-vv"
+          - "-vvv"
+      extra_vars:
+        description: "Extra Ansible vars (key=val space-separated, or @file.yml)"
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-docker-${{ inputs.limit || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: install-docker ${{ inputs.check_mode && '(check)' || '' }}
+    runs-on: [self-hosted]
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ansible/docker
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Ansible
+        run: |
+          set -euo pipefail
+          if ! python3 -m venv --help >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y python3-venv python3-pip
+          fi
+          VENV="$RUNNER_TEMP/ansible-venv"
+          python3 -m venv "$VENV"
+          "$VENV/bin/pip" install --upgrade pip
+          "$VENV/bin/pip" install "ansible-core>=2.16,<2.18" jmespath
+          echo "VENV_BIN=$VENV/bin" >> "$GITHUB_ENV"
+          echo "$VENV/bin" >> "$GITHUB_PATH"
+          "$VENV/bin/ansible" --version
+
+      - name: Install required Ansible collections
+        run: |
+          "$VENV_BIN/ansible-galaxy" collection install community.general ansible.posix
+
+      - name: Verify inventory exists
+        run: |
+          INV="${{ github.workspace }}/${{ inputs.inventory }}"
+          if [ ! -e "$INV" ]; then
+            echo "::error::Inventory not found at $INV"
+            exit 1
+          fi
+          echo "Using inventory: $INV"
+
+      - name: Run install_docker.yml
+        env:
+          ANSIBLE_FORCE_COLOR: "true"
+          ANSIBLE_HOST_KEY_CHECKING: "false"
+          INVENTORY: ${{ github.workspace }}/${{ inputs.inventory }}
+          LIMIT: ${{ inputs.limit }}
+          CHECK: ${{ inputs.check_mode && '--check --diff' || '' }}
+          VERB: ${{ inputs.verbosity }}
+          EXTRA_VARS: ${{ inputs.extra_vars }}
+          ALLOW_REBOOT: ${{ inputs.allow_reboot && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          LIMIT_ARG=""
+          [ -n "$LIMIT" ] && LIMIT_ARG="--limit $LIMIT"
+          EXTRA_ARG=""
+          [ -n "$EXTRA_VARS" ] && EXTRA_ARG="--extra-vars $EXTRA_VARS"
+
+          "$VENV_BIN/ansible-playbook" \
+            -i "$INVENTORY" \
+            $LIMIT_ARG \
+            $CHECK \
+            $VERB \
+            --extra-vars "allow_reboot=$ALLOW_REBOOT" \
+            $EXTRA_ARG \
+            install_docker.yml
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Docker deploy"
+            echo ""
+            echo "- Playbook: \`install_docker.yml\`"
+            echo "- Inventory: \`${{ inputs.inventory }}\`"
+            echo "- Limit: \`${{ inputs.limit || 'all' }}\`"
+            echo "- Check mode: \`${{ inputs.check_mode }}\`"
+            echo "- Allow reboot: \`${{ inputs.allow_reboot }}\`"
+            echo "- Result: \`${{ job.status }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

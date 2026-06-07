@@ -1,0 +1,178 @@
+name: Deploy Traefik
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Ansible --limit pattern (host or group). Leave blank for all."
+        type: string
+        required: false
+        default: ""
+      inventory:
+        description: "Inventory path (relative to repo root)"
+        type: string
+        required: true
+        default: "ansible/traefik/inventory"
+      wildcard_domain:
+        description: "Base domain for wildcard cert (e.g. jameskilby.cloud)"
+        type: string
+        required: true
+        default: "jameskilby.cloud"
+      traefik_image:
+        description: "Traefik image tag to deploy"
+        type: string
+        required: false
+        default: "traefik:v3.6.2"
+      deploy_test_service:
+        description: "Deploy the nginx-test sidecar (set false in production)"
+        type: boolean
+        required: false
+        default: true
+      check_mode:
+        description: "Dry-run with --check (no changes applied)"
+        type: boolean
+        required: false
+        default: false
+      verbosity:
+        description: "Ansible verbosity"
+        type: choice
+        required: false
+        default: "-v"
+        options:
+          - ""
+          - "-v"
+          - "-vv"
+          - "-vvv"
+      extra_vars:
+        description: "Extra Ansible vars (key=val space-separated, or @file.yml)"
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-traefik-${{ inputs.limit || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: traefik ${{ inputs.check_mode && '(check)' || '' }}
+    runs-on: [self-hosted]
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ansible/traefik
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Validate required secrets are present
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DASH_HASH: ${{ secrets.TRAEFIK_DASHBOARD_PWHASH }}
+        run: |
+          missing=0
+          [ -z "$CF_TOKEN" ]  && { echo "::error::Missing secret CLOUDFLARE_API_TOKEN";   missing=1; }
+          [ -z "$DASH_HASH" ] && { echo "::error::Missing secret TRAEFIK_DASHBOARD_PWHASH"; missing=1; }
+          [ "$missing" = "1" ] && exit 1
+          echo "All required secrets present."
+
+      - name: Install Ansible
+        run: |
+          set -euo pipefail
+          if ! python3 -m venv --help >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y python3-venv python3-pip
+          fi
+          VENV="$RUNNER_TEMP/ansible-venv"
+          python3 -m venv "$VENV"
+          "$VENV/bin/pip" install --upgrade pip
+          "$VENV/bin/pip" install "ansible-core>=2.16,<2.18" jmespath
+          echo "VENV_BIN=$VENV/bin" >> "$GITHUB_ENV"
+          echo "$VENV/bin" >> "$GITHUB_PATH"
+          "$VENV/bin/ansible" --version
+
+      - name: Install required Ansible collections
+        run: |
+          "$VENV_BIN/ansible-galaxy" collection install community.docker community.general ansible.posix
+
+      - name: Verify inventory exists
+        run: |
+          INV="${{ github.workspace }}/${{ inputs.inventory }}"
+          if [ ! -e "$INV" ]; then
+            echo "::error::Inventory not found at $INV"
+            exit 1
+          fi
+          echo "Using inventory: $INV"
+
+      - name: Write secrets to ephemeral vars file
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DASH_HASH: ${{ secrets.TRAEFIK_DASHBOARD_PWHASH }}
+          WILDCARD: ${{ inputs.wildcard_domain }}
+          IMAGE:    ${{ inputs.traefik_image }}
+          TEST_SVC: ${{ inputs.deploy_test_service && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          umask 077
+          SECRETS_FILE="$RUNNER_TEMP/traefik-secrets.yml"
+          cat > "$SECRETS_FILE" <<EOF
+          ---
+          cloudflare_api_token: "${CF_TOKEN}"
+          dashboard_admin_password_hash: "${DASH_HASH}"
+          wildcard_domain: "${WILDCARD}"
+          traefik_docker_image: "${IMAGE}"
+          traefik_deploy_test_service: ${TEST_SVC}
+          EOF
+          echo "SECRETS_FILE=$SECRETS_FILE" >> "$GITHUB_ENV"
+          # Mask the file path in logs just in case
+          echo "::add-mask::$CF_TOKEN"
+          echo "::add-mask::$DASH_HASH"
+
+      - name: Run traefik_deploy.yml
+        env:
+          ANSIBLE_FORCE_COLOR: "true"
+          ANSIBLE_HOST_KEY_CHECKING: "false"
+          INVENTORY: ${{ github.workspace }}/${{ inputs.inventory }}
+          LIMIT: ${{ inputs.limit }}
+          CHECK: ${{ inputs.check_mode && '--check --diff' || '' }}
+          VERB: ${{ inputs.verbosity }}
+          EXTRA_VARS: ${{ inputs.extra_vars }}
+        run: |
+          set -euo pipefail
+          LIMIT_ARG=""
+          [ -n "$LIMIT" ] && LIMIT_ARG="--limit $LIMIT"
+          EXTRA_ARG=""
+          [ -n "$EXTRA_VARS" ] && EXTRA_ARG="--extra-vars $EXTRA_VARS"
+
+          "$VENV_BIN/ansible-playbook" \
+            -i "$INVENTORY" \
+            $LIMIT_ARG \
+            $CHECK \
+            $VERB \
+            --extra-vars "@$SECRETS_FILE" \
+            $EXTRA_ARG \
+            traefik_deploy.yml
+
+      - name: Shred ephemeral secrets file
+        if: always()
+        run: |
+          if [ -n "${SECRETS_FILE:-}" ] && [ -f "$SECRETS_FILE" ]; then
+            shred -u "$SECRETS_FILE" 2>/dev/null || rm -f "$SECRETS_FILE"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Traefik deploy"
+            echo ""
+            echo "- Playbook: \`traefik_deploy.yml\`"
+            echo "- Inventory: \`${{ inputs.inventory }}\`"
+            echo "- Limit: \`${{ inputs.limit || 'all' }}\`"
+            echo "- Wildcard domain: \`${{ inputs.wildcard_domain }}\`"
+            echo "- Image: \`${{ inputs.traefik_image }}\`"
+            echo "- Test service: \`${{ inputs.deploy_test_service }}\`"
+            echo "- Check mode: \`${{ inputs.check_mode }}\`"
+            echo "- Result: \`${{ job.status }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
