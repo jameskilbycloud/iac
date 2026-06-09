@@ -3,8 +3,8 @@ all:
   children:
     vgpu_hosts:
       hosts:
-        blogtest3:
-          ansible_host: 192.168.4.63
+        blogtest5:
+          ansible_host: 192.168.4.3
       vars:
         ansible_user: w20kilja
         ansible_become: true
