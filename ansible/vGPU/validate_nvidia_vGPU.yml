@@ -5,28 +5,50 @@
   gather_facts: no
   vars:
     ansible_python_interpreter: /usr/bin/python3
+    nvidia_token_dir: /etc/nvidia/ClientConfigToken
 
   tasks:
-    - name: Check if NVIDIA license token directory exists
+    - name: Check if nvidia-smi is installed
       ansible.builtin.stat:
-        path: /var/lib/nvidia/licensing/
+        path: /usr/bin/nvidia-smi
+      register: nvidia_smi_bin
+
+    - name: Fail if NVIDIA driver is not installed
+      ansible.builtin.fail:
+        msg: "NVIDIA vGPU drivers do not appear to be installed on this host (nvidia-smi not found). Run the 'drivers' playbook first."
+      when: not nvidia_smi_bin.stat.exists
+
+    - name: Check if NVIDIA ClientConfigToken directory exists
+      ansible.builtin.stat:
+        path: "{{ nvidia_token_dir }}"
       register: license_dir
 
-    - name: Fail if license directory does not exist
+    - name: Fail if license token directory does not exist
       ansible.builtin.fail:
-        msg: "License directory not found: /var/lib/nvidia/licensing/"
+        msg: "License token directory not found: {{ nvidia_token_dir }}. Run the 'drivers' playbook to deploy the licence token."
       when: not license_dir.stat.exists
 
     - name: Check for .tok license token file
       ansible.builtin.find:
-        paths: /var/lib/nvidia/licensing/
+        paths: "{{ nvidia_token_dir }}"
         patterns: "*.tok"
       register: token_files
 
     - name: Fail if no .tok license token file found
       ansible.builtin.fail:
-        msg: "No NVIDIA license token (*.tok) found in /var/lib/nvidia/licensing/"
+        msg: "No NVIDIA license token (*.tok) found in {{ nvidia_token_dir }}. Run the 'drivers' playbook to deploy the licence token."
       when: token_files.matched == 0
+
+    - name: Check if nvidia-gridd service is registered
+      ansible.builtin.command: systemctl list-unit-files nvidia-gridd.service
+      register: gridd_unit
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if nvidia-gridd service is not registered
+      ansible.builtin.fail:
+        msg: "nvidia-gridd service is not registered on this host. The NVIDIA vGPU guest driver install is incomplete — run the 'drivers' playbook."
+      when: "'nvidia-gridd.service' not in gridd_unit.stdout"
 
     - name: Check if nvidia-gridd service is running
       ansible.builtin.systemd:
