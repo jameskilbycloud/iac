@@ -13,11 +13,19 @@
   hosts: mikrotik
   gather_facts: false
 
+  vars:
+    ansible_python_interpreter: auto_silent
+    # Interface name prefixes that never get LLDP comments (logical interfaces).
+    # Also used to pick the physical member out of neighbour entries like
+    # "qsfp28-1-1,br-vcf".
+    skip_interfaces_re: >-
+      ^({{ (skip_interfaces | default(['lo', 'bridge', 'br-', 'vlan'])) | join('|') }})
+
   module_defaults:
     group/community.routeros.api:
       hostname: "{{ ansible_host }}"
       username: "{{ ansible_user }}"
-      password: "{{ ansible_password }}"
+      password: "{{ ansible_password | default(mikrotik_api_password) }}"
       tls: false
       validate_certs: false
 
@@ -26,30 +34,47 @@
       community.routeros.api:
         path: "ip neighbor"
       register: neighbours
+      check_mode: false
 
     - name: Fetch interfaces
       community.routeros.api_info:
         path: interface
       register: interfaces
+      check_mode: false
 
-    - name: Build interface -> neighbour identity map
+    # Neighbours seen through a bridge are reported with the bridge in the
+    # interface field (comma-separated, e.g. "qsfp28-1-1,br-vcf"), so resolve
+    # each entry to its physical member port. A port can see several
+    # neighbours (uplinks), so collect a list of identities per port.
+    - name: Build interface -> neighbour identities map
       ansible.builtin.set_fact:
         neighbour_map: >-
           {{
-            dict(
-              _items | map(attribute='interface')
-              | zip(_items | map(attribute='identity'))
-            )
+            neighbour_map | default({})
+            | combine({_port: ((neighbour_map | default({}))[_port] | default([])) + [item.identity]})
           }}
       vars:
-        _items: >-
+        _port: >-
           {{
-            neighbours.msg
-            | selectattr('interface', 'defined')
-            | selectattr('identity', 'defined')
-            | rejectattr('identity', 'equalto', '')
-            | list
+            item.interface | string | split(',')
+            | reject('match', skip_interfaces_re)
+            | first | default('')
           }}
+      when: _port | length > 0
+      loop: >-
+        {{
+          neighbours.msg
+          | selectattr('interface', 'defined')
+          | selectattr('identity', 'defined')
+          | rejectattr('identity', 'equalto', '')
+          | list
+        }}
+      loop_control:
+        label: "{{ item.interface }} -> {{ item.identity }}"
+
+    - name: Show resolved neighbour map
+      ansible.builtin.debug:
+        msg: "{{ neighbour_map | default({}) }}"
 
     - name: Update interface comment from neighbour identity
       community.routeros.api_find_and_modify:
@@ -57,14 +82,14 @@
         find:
           name: "{{ item['name'] }}"
         values:
-          comment: "{{ comment_prefix | default('LLDP') }}: {{ neighbour_map[item['name']] }}"
+          comment: "{{ comment_prefix | default('LLDP') }}: {{ neighbour_map[item['name']] | unique | join(', ') }}"
       loop: "{{ interfaces.result }}"
       loop_control:
         label: "{{ item['name'] }}"
       when:
         - item['name'] in (neighbour_map | default({}))
         - item['name'] not in (static_interface_comments | default({}))
-        - item['name'] | regex_search('^(' + (skip_interfaces | default(['lo', 'bridge', 'vlan'])) | join('|') + ')') == none
+        - item['name'] is not match(skip_interfaces_re)
 
     - name: Apply static interface comments
       community.routeros.api_find_and_modify:

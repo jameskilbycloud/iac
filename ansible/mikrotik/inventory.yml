@@ -1,6 +1,11 @@
 ---
 all:
   children:
+    # Alias so playbooks targeting "mikrotik" (and the SemaphoreUI static
+    # inventory, which uses that group name) work with this inventory too.
+    mikrotik:
+      children:
+        mikrotik_switches: {}
     mikrotik_switches:
       hosts:
         mikrotik-sw-1:
