@@ -82,7 +82,7 @@
         find:
           name: "{{ item['name'] }}"
         values:
-          comment: "{{ comment_prefix | default('LLDP') }}: {{ neighbour_map[item['name']] | unique | join(', ') }}"
+          comment: "{{ comment_prefix | default('LLDP') }}: {{ neighbour_map[item['name']] | unique | sort | join(', ') }}"
       loop: "{{ interfaces.result }}"
       loop_control:
         label: "{{ item['name'] }}"
