@@ -8,6 +8,8 @@
 #   - System basics (identity, NTP, DNS)
 #   - Bridge with VLAN filtering and jumbo frames
 #   - VCF VLANs (management, vMotion, vSAN, TEP, VM, NFS, DMZ)
+#   - Untagged access ports (e.g. WAN transit VLAN passing the ISP
+#     handoff through to the UniFi gateway's WAN port at L2)
 #   - Per-VLAN DHCP scopes
 #   - Service hardening (disable telnet/ftp/http)
 #   - BGP peering with routing filters
@@ -74,6 +76,25 @@
           - /ip dns set servers={{ dns_servers }}
 
     # =================================================================
+    # MANAGEMENT SAFETY NET — must run before any bridge teardown.
+    # On a legacy device the management IP lives on a VLAN interface of
+    # the old default bridge; removing that bridge would cut us off
+    # unless the IP already exists on the dedicated management port.
+    # =================================================================
+
+    - name: Ensure management IP exists before bridge changes
+      tags: [always]
+      when: management_ip is defined and management_interface is defined
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/ip address find address="{{ management_ip }}"
+            interface={{ management_interface }}]] = 0) do={
+            /ip address add address={{ management_ip }}
+            interface={{ management_interface }}
+            comment="Management IP — Ansible managed" }
+
+    # =================================================================
     # CLEANUP — remove stale config from previous provisioning runs
     # Only removes objects NOT managed by this playbook (orphans)
     # =================================================================
@@ -81,6 +102,14 @@
     - name: Remove old default bridge and orphaned entries
       tags: [cleanup, bridge]
       block:
+        - name: Normalize interface names to factory defaults (labels live in comments)
+          community.routeros.command:
+            commands:
+              - >-
+                :foreach i in=[/interface ethernet find] do={
+                /interface ethernet set $i name=[get $i default-name] }
+          ignore_errors: true
+
         - name: Remove all ports from old default bridge
           community.routeros.command:
             commands:
@@ -209,6 +238,42 @@
       loop_control:
         label: "{{ item }}"
 
+    - name: Ensure access ports are in bridge (untagged, PVID set)
+      tags: [bridge]
+      when: access_vlans is defined
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/interface bridge port find
+            interface={{ item.1.name }} bridge={{ bridge_name }}]] = 0) do={
+            :do { /interface bridge port remove [find interface={{ item.1.name }}] } on-error={};
+            /interface bridge port add bridge={{ bridge_name }} interface={{ item.1.name }} hw=yes }
+          - >-
+            /interface bridge port set
+            [find interface={{ item.1.name }} bridge={{ bridge_name }}]
+            pvid={{ item.0.id }}
+            frame-types=admit-only-untagged-and-priority-tagged
+            comment="{{ item.1.comment }} — Ansible managed"
+      loop: "{{ access_vlans | default([]) | subelements('ports') }}"
+      loop_control:
+        label: "{{ item.1.name }} -> VLAN {{ item.0.id }} untagged"
+
+    - name: Ensure managed interfaces are enabled
+      tags: [bridge]
+      community.routeros.command:
+        commands:
+          - /interface enable [find name={{ item }}]
+      loop: >-
+        {{
+          (
+            trunk_interfaces
+            + uplink_interfaces
+            + (access_vlans | default([]) | map(attribute='ports') | flatten | map(attribute='name') | list)
+          ) | unique
+        }}
+      loop_control:
+        label: "Enable {{ item }}"
+
     - name: Disable unused interfaces
       tags: [bridge]
       when: disabled_interfaces is defined
@@ -285,6 +350,27 @@
             [find vlan-ids={{ item.id }} bridge={{ bridge_name }}]
             tagged={{ bridge_name ~ ',' ~ vlan_tagged_map[item.id | string] if item.network is defined else vlan_tagged_map[item.id | string] }}
       loop: "{{ vlans }}"
+      loop_control:
+        label: "VLAN {{ item.id }} ({{ item.name }})"
+
+    - name: Ensure access VLAN bridge entries exist (L2 transit, untagged only)
+      tags: [vlans]
+      when: access_vlans is defined
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/interface bridge vlan find
+            vlan-ids={{ item.id }} bridge={{ bridge_name }}]] = 0) do={
+            /interface bridge vlan add bridge={{ bridge_name }}
+            vlan-ids={{ item.id }}
+            untagged={{ item.ports | map(attribute='name') | join(',') }}
+            comment="VLAN {{ item.id }} {{ item.name }} — L2 transit, Ansible managed" }
+          - >-
+            /interface bridge vlan set
+            [find vlan-ids={{ item.id }} bridge={{ bridge_name }}]
+            untagged={{ item.ports | map(attribute='name') | join(',') }}
+            comment="VLAN {{ item.id }} {{ item.name }} — L2 transit, Ansible managed"
+      loop: "{{ access_vlans }}"
       loop_control:
         label: "VLAN {{ item.id }} ({{ item.name }})"
 
@@ -460,7 +546,7 @@
             dst-address="0.0.0.0/0" gateway={{ management_gateway }} !dynamic]] = 0) do={
             :do { /ip route remove [find dst-address="0.0.0.0/0" !dynamic] } on-error={};
             /ip route add dst-address=0.0.0.0/0 gateway={{ management_gateway }}
-            comment="Default route to Watchguard — Ansible managed" }
+            comment="Default route to gateway — Ansible managed" }
 
     - name: Enable IP forwarding
       tags: [routing]
@@ -680,22 +766,6 @@
                     comment="Default deny inbound - Ansible managed"
 
     # =================================================================
-    # MANAGEMENT IP (ensure we don't lose access)
-    # =================================================================
-
-    - name: Ensure management IP is configured
-      tags: [routing]
-      when: management_ip is defined and management_interface is defined
-      community.routeros.command:
-        commands:
-          - >-
-            :if ([:len [/ip address find address="{{ management_ip }}"
-            interface={{ management_interface }}]] = 0) do={
-            /ip address add address={{ management_ip }}
-            interface={{ management_interface }}
-            comment="Management IP — Ansible managed" }
-
-    # =================================================================
     # FINAL BACKUP
     # =================================================================
 
@@ -712,6 +782,7 @@
           VCF provisioning complete for {{ inventory_hostname }} ({{ ansible_host }})
             Bridge:     {{ bridge_name }} (VLAN filtering, MTU {{ bridge_mtu }})
             VLANs:      {{ vlans | map(attribute='id') | join(', ') }}
+            Access:     {{ access_vlans | default([]) | map(attribute='name') | join(', ') | default('none', true) }}
             DHCP:       {{ dhcp_vlans | default([]) | map(attribute='name') | join(', ') | default('disabled') }}
             BGP:        {{ 'AS ' ~ bgp_as ~ ' -> ' ~ bgp_peer_address ~ ' (' ~ bgp_peer_name ~ ')' if enable_bgp | default(false) else 'disabled' }}
             BGP filter: {{ 'unchanged' if not (bgp_out_needs_rebuild | default(false) | bool) else 'rebuilt' }}

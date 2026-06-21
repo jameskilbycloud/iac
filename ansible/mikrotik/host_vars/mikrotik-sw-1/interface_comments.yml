@@ -14,3 +14,8 @@ static_interface_comments:
   # Workstations
   qsfp28-2-2: "Z840-1"
   qsfp28-2-3: "Z840-2"
+
+  # UniFi gateway (replaced Watchguard)
+  qsfp28-4-1: "UniFi LAN trunk"
+  qsfp28-4-2: "UniFi WAN"
+  qsfp28-4-3: "ISP handoff"

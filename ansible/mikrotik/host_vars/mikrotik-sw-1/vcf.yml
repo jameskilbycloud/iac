@@ -11,7 +11,7 @@ management_gateway: "192.168.3.248"
 # Interface groups — referenced by name in vlan tagged_groups
 interface_groups:
   uplink:
-    - qsfp28-1-1
+    - qsfp28-4-1   # UniFi gateway LAN trunk (10G via QSA)
   hosts:
     - qsfp28-1-2
     - qsfp28-1-3
@@ -25,18 +25,19 @@ interface_groups:
   workstations:
     - qsfp28-2-2
     - qsfp28-2-3
-  infra:
-    - qsfp28-4-1
 
 # All interfaces to add to the bridge (union of all groups)
 # Interface speed overrides (for DAC/breakout cables)
 interface_speed_overrides:
-  - name: qsfp28-1-1
+  - name: qsfp28-4-1
+    speed: 10G-baseCR
+    auto_negotiation: false
+  - name: qsfp28-4-2
     speed: 10G-baseCR
     auto_negotiation: false
 
 uplink_interfaces:
-  - qsfp28-1-1
+  - qsfp28-4-1
 
 trunk_interfaces:
   - qsfp28-1-2
@@ -49,13 +50,22 @@ trunk_interfaces:
   - qsfp28-3-2
   - qsfp28-3-3
   - qsfp28-3-4
-  - qsfp28-4-1
+
+# Access (untagged) ports grouped by VLAN — pure L2 transit, no switch IP.
+# WAN-Transit carries the ISP handoff straight through to the UniFi WAN port.
+access_vlans:
+  - id: 999
+    name: WAN-Transit
+    ports:
+      - name: qsfp28-4-2
+        comment: "UniFi WAN (untagged)"
+      - name: qsfp28-4-3
+        comment: "ISP handoff (untagged)"
 
 # Ports to disable (unused — not in any group)
 disabled_interfaces:
+  - qsfp28-1-1   # old Watchguard uplink — freed at cutover
   - qsfp28-2-1
-  - qsfp28-4-2
-  - qsfp28-4-3
   - qsfp28-4-4
 
 # VLAN definitions
@@ -152,7 +162,7 @@ vlans:
 bgp_router_id: "192.168.3.1"
 bgp_local_address: "192.168.3.1"
 bgp_peer_address: "192.168.3.248"
-bgp_peer_name: "watchguard"
+bgp_peer_name: "unifi"
 
 bgp_advertise_networks:
   - "192.168.2.0/24"
