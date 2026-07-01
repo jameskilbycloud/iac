@@ -26,7 +26,7 @@
       hostname: "{{ ansible_host }}"
       username: "{{ ansible_user }}"
       password: "{{ ansible_password | default(mikrotik_api_password) }}"
-      tls: false
+      tls: true   # plaintext API (8728) is disabled — see services_disabled in group_vars
       validate_certs: false
 
   tasks:

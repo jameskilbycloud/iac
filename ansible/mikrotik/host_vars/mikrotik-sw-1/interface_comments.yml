@@ -7,15 +7,13 @@
 # Comments here are written verbatim — no prefix is added.
 
 static_interface_comments:
-  # Storage (no LLDP advertisement)
-  qsfp28-1-4: "StoreServ1"
-  qsfp28-2-4: "StoreServ2"
+  # TrueNAS server (no LLDP advertisement) — confirmed 2026-07-01. Two NICs:
+  # one on NFS-Storage (VLAN 60), one on iscsi2-Legacy (VLAN 61).
+  qsfp28-1-4: "TrueNAS (NFS)"
+  qsfp28-2-4: "TrueNAS (iSCSI)"
 
-  # Workstations
-  qsfp28-2-2: "Z840-1"
-  qsfp28-2-3: "Z840-2"
-
-  # UniFi gateway (replaced Watchguard)
-  qsfp28-4-1: "UniFi LAN trunk"
-  qsfp28-4-2: "UniFi WAN"
-  qsfp28-4-3: "ISP handoff"
+  # Cleared 2026-07-01 pending a physical port re-map — the previous entries
+  # (Z840-1/2, StoreServ1/2, UniFi ports) were found to be stale after
+  # discovering qsfp28-2-2 actually carries uk-bhr-p-ntnx-1, not Z840-1.
+  # Re-add entries here only for devices confirmed not to advertise LLDP/CDP,
+  # once the live port map is verified against reality.
