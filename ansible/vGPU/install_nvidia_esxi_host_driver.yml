@@ -1,0 +1,152 @@
+---
+- name: Install NVIDIA vGPU host driver on ESXi hosts
+  hosts: esxi_hosts
+  gather_facts: false
+  # One host at a time - each host enters maintenance mode and reboots
+  serial: 1
+
+  vars:
+    ansible_python_interpreter: /bin/python
+    ansible_remote_tmp: /tmp/.ansible
+
+    # Driver bundle location on the NFS datastore - override via inventory,
+    # group_vars, or --extra-vars. The datastore must already be mounted on
+    # the host (visible under /vmfs/volumes/).
+    esxi_datastore: "{{ nvidia_esxi_datastore | default('ISO') }}"
+    esxi_datastore_dir: "{{ nvidia_esxi_datastore_dir | default('nvidia/NVIDIA-GRID-vSphere-8-3/Host_Drivers') }}"
+    esxi_driver_bundle: "{{ nvidia_esxi_driver_bundle | default('NVD-VGPU-800_595.71.03-1OEM.800.1.0.20613240.zip') }}"
+    esxi_driver_path: "/vmfs/volumes/{{ esxi_datastore }}/{{ (esxi_datastore_dir ~ '/') if esxi_datastore_dir | length > 0 else '' }}{{ esxi_driver_bundle }}"
+
+    # Driver version used for the idempotency check - derived from the bundle
+    # filename (e.g. NVD-VGPU-800_595.71.01-1OEM...zip -> 595.71.01)
+    esxi_driver_version: "{{ nvidia_esxi_driver_version | default(esxi_driver_bundle | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+')) }}"
+
+    esxi_maintenance_timeout: "{{ nvidia_esxi_maintenance_timeout | default(300) }}"
+    esxi_reboot_timeout: "{{ nvidia_esxi_reboot_timeout | default(1800) }}"
+
+  tasks:
+    - name: Abort if driver bundle is not specified
+      ansible.builtin.assert:
+        that:
+          - esxi_driver_bundle | length > 0
+          - esxi_driver_version | length > 0
+        fail_msg: >-
+          Set nvidia_esxi_driver_bundle to the host driver zip on the NFS
+          datastore, e.g.
+          -e "nvidia_esxi_driver_bundle=NVD-VGPU-800_595.71.01-1OEM.800.1.0.20613240_12345678.zip".
+          List available bundles with:
+          ls /vmfs/volumes/{{ esxi_datastore }}/{{ esxi_datastore_dir }}/
+
+    - name: Check currently installed NVIDIA host driver
+      ansible.builtin.shell: esxcli software vib list | grep -iE 'NVD|NVIDIA' || true
+      register: nvidia_vib_check
+      changed_when: false
+
+    - name: Report existing driver
+      ansible.builtin.debug:
+        msg: "NVIDIA host driver {{ esxi_driver_version }} is already installed. Skipping installation."
+      when: esxi_driver_version in nvidia_vib_check.stdout
+
+    - name: Install NVIDIA vGPU host driver
+      when: esxi_driver_version not in nvidia_vib_check.stdout
+      block:
+        - name: Verify driver bundle exists on datastore
+          ansible.builtin.shell: "[ -f '{{ esxi_driver_path }}' ]"
+          changed_when: false
+
+        - name: Check for running VMs
+          ansible.builtin.shell: esxcli vm process list
+          register: running_vms
+          changed_when: false
+
+        - name: Abort if VMs are running
+          ansible.builtin.assert:
+            that:
+              - running_vms.stdout | trim | length == 0
+            fail_msg: >-
+              Running VMs found on {{ inventory_hostname }}. vMotion or power
+              them off before installing the host driver - the host must enter
+              maintenance mode and reboot.
+
+        - name: Enter maintenance mode
+          ansible.builtin.shell: |
+            if [ "$(esxcli system maintenanceMode get)" != "Enabled" ]; then
+              esxcli system maintenanceMode set --enable true --timeout {{ esxi_maintenance_timeout }}
+              echo ANSIBLE_CHANGED
+            fi
+          register: mm_enable
+          changed_when: "'ANSIBLE_CHANGED' in mm_enable.stdout"
+
+        - name: Install or update NVIDIA vGPU host driver VIB
+          ansible.builtin.shell: >-
+            esxcli software vib
+            {{ 'update' if nvidia_vib_check.stdout | trim | length > 0 else 'install' }}
+            -d {{ esxi_driver_path }}
+          register: vib_install
+          changed_when: "vib_install.stdout is search('VIBs Installed: \\S')"
+
+        - name: Show install result
+          ansible.builtin.debug:
+            msg: "{{ vib_install.stdout_lines }}"
+
+        - name: Determine if reboot is required
+          ansible.builtin.set_fact:
+            esxi_reboot_required: "{{ vib_install.stdout is search('Reboot Required: true') }}"
+
+        - name: Reboot host
+          ansible.builtin.shell: esxcli system shutdown reboot -r "NVIDIA vGPU host driver install"
+          async: 1
+          poll: 0
+          when: esxi_reboot_required
+
+        - name: Wait for host to return
+          ansible.builtin.wait_for_connection:
+            delay: 60
+            timeout: "{{ esxi_reboot_timeout }}"
+          when: esxi_reboot_required
+
+        - name: Exit maintenance mode
+          ansible.builtin.shell: |
+            if [ "$(esxcli system maintenanceMode get)" = "Enabled" ]; then
+              esxcli system maintenanceMode set --enable false
+              echo ANSIBLE_CHANGED
+            fi
+          register: mm_disable
+          changed_when: "'ANSIBLE_CHANGED' in mm_disable.stdout"
+          when: mm_enable.changed
+
+      rescue:
+        - name: Display installation failure
+          ansible.builtin.debug:
+            msg: |
+              NVIDIA host driver installation failed on {{ inventory_hostname }}.
+              The host may still be in maintenance mode - it has been left there
+              deliberately so it can be inspected safely.
+
+              Verify:
+              - Driver bundle exists at {{ esxi_driver_path }}
+              - The bundle matches this ESXi major version (esxcli software vib install output above)
+              - No conflicting NVIDIA VIBs are installed (esxcli software vib list)
+
+        - name: Fail with installation error
+          ansible.builtin.fail:
+            msg: "NVIDIA vGPU host driver installation failed. Check output above."
+
+    - name: Verify installed NVIDIA VIB
+      ansible.builtin.shell: esxcli software vib list | grep -iE 'NVD|NVIDIA'
+      register: vib_verify
+      changed_when: false
+
+    - name: Check GPU visibility with nvidia-smi
+      ansible.builtin.command: nvidia-smi
+      register: nvidia_smi
+      changed_when: false
+
+    - name: Show driver status
+      ansible.builtin.debug:
+        msg: |
+          Installed VIB(s):
+          {{ vib_verify.stdout }}
+
+          nvidia-smi:
+          {{ nvidia_smi.stdout }}
