@@ -5,25 +5,33 @@
 # System
 system_identity: "vcf-switch"
 system_timezone: "Europe/London"
-ntp_server: "ntp-1.jameskilby.cloud"
+ntp_server: "ntp-1.jameskilby.cloud"   # override per-host: mikrotik-sw-1 IS ntp-1.jameskilby.cloud, so it syncs from time.cloudflare.com instead
+enable_ntp_server: false   # override to true on the host that should serve NTP to the rest of the lab
 dns_servers: "192.168.10.250,192.168.10.251"
 
 # Bridge
 bridge_name: "br-vcf"
 bridge_vlan_filtering: "yes"
 bridge_mtu: 9216
+# Physical-port L2MTU. Must be >= bridge_mtu + 4 so that VLAN sub-interfaces
+# (which inherit l2mtu = parent_l2mtu - 4 for the tag) can still carry a full
+# bridge_mtu-sized frame. With l2mtu 9216 a VLAN maxes out at mtu 9212; setting
+# 9220 here lets VLAN interfaces run mtu=9216.
+bridge_l2mtu: 9220
 
 # Services — disable insecure, keep management
+# `api` (plaintext RouterOS API, port 8728) is disabled here — all Ansible
+# automation uses api-ssl (8729) instead. See update_interface_comments.yml
+# and the BGP tasks in this playbook, both configured with tls: true.
 services_disabled:
   - telnet
   - ftp
   - www
+  - api
 
 services_enabled:
   - name: ssh
     port: 22
-  - name: api
-    port: 8728
   - name: api-ssl
     port: 8729
   - name: www-ssl

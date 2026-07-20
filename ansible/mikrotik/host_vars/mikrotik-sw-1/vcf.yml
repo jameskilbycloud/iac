@@ -3,6 +3,12 @@
 
 system_identity: "vcf-switch-01"
 
+# NTP — this switch IS ntp-1.jameskilby.cloud, the lab's NTP server, so it
+# can't sync from itself: it syncs from Cloudflare upstream and serves NTP
+# to everything else in the lab.
+ntp_server: "time.cloudflare.com"
+enable_ntp_server: true
+
 # Management
 management_interface: "ether1"
 management_ip: "192.168.3.1/24"
@@ -10,11 +16,19 @@ management_gateway: "192.168.3.248"
 
 # Interface groups — referenced by name in vlan tagged_groups
 interface_groups:
-  uplink:
-    - qsfp28-4-1   # UniFi gateway LAN trunk (10G via QSA)
+  uplink: []   # qsfp28-4-1 (UniFi gateway LAN trunk) disabled 2026-07-01 — see disabled_interfaces
+  interswitch:
+    - qsfp28-1-1   # UniFi gateway + trunk to mikrotik-sw-2 (CRS305) / downstream
+                   # MikroTik fabric. NOTE: the UniFi is reached via THIS port,
+                   # not qsfp28-4-1 — so any VLAN that must reach the gateway
+                   # (e.g. VLAN 60, whose DHCP server lives on the UniFi) has to
+                   # tag `interswitch`, not just `uplink`.
   hosts:
     - qsfp28-1-2
     - qsfp28-1-3
+    - qsfp28-2-1   # uk-bhr-p-ntnx-2 (2nd link) — cabled 2026-07-01
+    - qsfp28-2-2   # uk-bhr-p-ntnx-1 — was mislabelled "Z840-1"
+    - qsfp28-2-3   # uk-bhr-p-ntnx-2 — was mislabelled "Z840-2"
     - qsfp28-3-1
     - qsfp28-3-2
     - qsfp28-3-3
@@ -22,27 +36,20 @@ interface_groups:
   storage:
     - qsfp28-1-4
     - qsfp28-2-4
-  workstations:
-    - qsfp28-2-2
-    - qsfp28-2-3
 
 # All interfaces to add to the bridge (union of all groups)
 # Interface speed overrides (for DAC/breakout cables)
-interface_speed_overrides:
-  - name: qsfp28-4-1
-    speed: 10G-baseCR
-    auto_negotiation: false
-  - name: qsfp28-4-2
-    speed: 10G-baseCR
-    auto_negotiation: false
+# (qsfp28-4-1/4-2 overrides removed 2026-07-01 — ports disabled, see disabled_interfaces)
+interface_speed_overrides: []
 
-uplink_interfaces:
-  - qsfp28-4-1
+uplink_interfaces: []   # qsfp28-4-1 disabled 2026-07-01 — see disabled_interfaces
 
 trunk_interfaces:
+  - qsfp28-1-1   # Trunk to mikrotik-sw-2 + downstream fabric (was disabled pre-cutover)
   - qsfp28-1-2
   - qsfp28-1-3
   - qsfp28-1-4
+  - qsfp28-2-1   # uk-bhr-p-ntnx-2 (2nd link) — cabled 2026-07-01
   - qsfp28-2-2
   - qsfp28-2-3
   - qsfp28-2-4
@@ -52,20 +59,15 @@ trunk_interfaces:
   - qsfp28-3-4
 
 # Access (untagged) ports grouped by VLAN — pure L2 transit, no switch IP.
-# WAN-Transit carries the ISP handoff straight through to the UniFi WAN port.
-access_vlans:
-  - id: 999
-    name: WAN-Transit
-    ports:
-      - name: qsfp28-4-2
-        comment: "UniFi WAN (untagged)"
-      - name: qsfp28-4-3
-        comment: "ISP handoff (untagged)"
+# WAN-Transit (qsfp28-4-2/4-3) removed 2026-07-01 alongside the UniFi uplink
+# — see disabled_interfaces below.
+access_vlans: []
 
 # Ports to disable (unused — not in any group)
 disabled_interfaces:
-  - qsfp28-1-1   # old Watchguard uplink — freed at cutover
-  - qsfp28-2-1
+  - qsfp28-4-1   # UniFi gateway LAN trunk — disabled 2026-07-01
+  - qsfp28-4-2   # UniFi WAN — disabled 2026-07-01
+  - qsfp28-4-3   # ISP handoff — disabled 2026-07-01
   - qsfp28-4-4
 
 # VLAN definitions
@@ -77,6 +79,7 @@ vlans:
     tagged_groups:
       - uplink
       - hosts
+      - interswitch
 
   - id: 101
     name: vMotion
@@ -85,6 +88,7 @@ vlans:
     tagged_groups:
       - uplink
       - hosts
+      - interswitch
 
   - id: 102
     name: vSAN
@@ -143,6 +147,7 @@ vlans:
     tagged_groups:
       - uplink
       - hosts
+      - interswitch
     dhcp:
       pool_name: dhcp-dmz-pool
       server_name: dhcp-dmz
@@ -157,6 +162,84 @@ vlans:
       - uplink
       - hosts
       - storage
+      - interswitch
+
+  # ---------------------------------------------------------------------
+  # Legacy pre-cutover VMware VLANs — kept alongside the renumbered
+  # 100-series so existing ESXi hosts keep working on their original IDs.
+  # All pure L2 (no SVI/DHCP on the switch); routing handled upstream.
+  # Tagged to the VMware host ports + UniFi uplink, matching the pre-cutover
+  # tagging captured in configs/*_latest.rsc. (The old "workstations" group —
+  # qsfp28-2-2/2-3, mislabelled "Z840-1"/"Z840-2" — was stale: those ports are
+  # uk-bhr-p-ntnx-1/2 and now live in the `hosts` group.)
+  # ---------------------------------------------------------------------
+  - id: 38
+    name: VMware-Management   # was "VMwareMGMT" (now also on VLAN 100)
+    mtu: 9216
+    tagged_groups:
+      - uplink
+      - hosts
+      - interswitch
+
+  - id: 39
+    name: vMotion-Legacy      # was "vMotion" (now also on VLAN 101)
+    mtu: 9216
+    tagged_groups:
+      - uplink
+      - hosts
+      - interswitch
+
+  - id: 40
+    name: vSAN-Legacy         # was "vSAN" (now also on VLAN 102)
+    mtu: 9216
+    tagged_groups:
+      - uplink
+      - hosts
+      - interswitch
+
+  - id: 3
+    name: NetMan-Legacy       # was "NetMan"
+    tagged_groups:
+      - uplink
+      - hosts
+      - interswitch
+
+  - id: 4
+    name: ServerVLAN-Legacy   # was "ServerVLAN"
+    tagged_groups:
+      - uplink
+      - hosts
+      - interswitch
+
+  - id: 61
+    name: iscsi2-Legacy       # was "iscsi2"; also reaches storage targets
+    mtu: 9216
+    tagged_groups:
+      - uplink
+      - hosts
+      - storage
+      - interswitch
+
+# Holodeck (nested VCF) transit VLANs — https://github.com/vmware/Holodeck
+# Holodeck 9.1: multi-host nested deployments need the Holodeck VLAN ranges
+# carried (tagged) on the physical trunk between ESXi hosts. The defaults
+# (Site A 10-25, Site B 40-58) collide with this fabric, so we relocate via a
+# custom VLANRangeStart. site_a_start / site_b_start map 1:1 to Holodeck's
+# VLANRangeStart = [site_a, site_b]. Site A needs 16 consecutive VLANs (always);
+# Site B needs 19 (dual-site / NSX Federation / DR only — set dual_site=false
+# for a single-site deployment to skip it). Pure L2: the Holo-Router does all
+# routing, so no SVI/DHCP/BGP on the switch. VLAN 0 (untagged) is already
+# carried as the native VLAN on the trunk ports. Keep the two blocks
+# non-overlapping with each other and with the VLANs above.
+holodeck:
+  enabled: true
+  dual_site: true           # Site A + Site B (multisite). false = Site A only.
+  site_a_start: 300         # Site A: 16 consecutive -> VLANs 300-315
+  site_b_start: 330         # Site B: 19 consecutive -> VLANs 330-348 (dual-site only)
+  mtu: 9216
+  tagged_groups:
+    - hosts
+    - interswitch
 
 # BGP
 bgp_router_id: "192.168.3.1"

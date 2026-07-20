@@ -60,6 +60,15 @@
         commands:
           - /system ntp client set enabled=yes
 
+    - name: Remove NTP client servers not matching desired upstream
+      tags: [system]
+      community.routeros.command:
+        commands:
+          - >-
+            :foreach i in=[/system ntp client servers find
+            where address!={{ ntp_server }}] do={
+            /system ntp client servers remove $i }
+
     - name: Add NTP server (if not present)
       tags: [system]
       community.routeros.command:
@@ -68,6 +77,13 @@
             :if ([:len [/system ntp client servers find
             address={{ ntp_server }}]] = 0) do={
             /system ntp client servers add address={{ ntp_server }} }
+
+    - name: Enable NTP server role (this switch is the lab's NTP server)
+      tags: [system]
+      when: enable_ntp_server | default(false)
+      community.routeros.command:
+        commands:
+          - /system ntp server set enabled=yes
 
     - name: Configure DNS servers
       tags: [system]
@@ -202,13 +218,15 @@
       loop_control:
         label: "{{ item.name }} -> {{ item.speed }}"
 
+    # Tagged [vlans] too: VLAN sub-interfaces cap their MTU at this l2mtu,
+    # so a --tags vlans run must raise l2mtu before the VLANs are created.
     - name: Set MTU on all QSFP28 interfaces
-      tags: [bridge]
+      tags: [bridge, vlans]
       community.routeros.command:
         commands:
           - >-
             :foreach i in=[/interface find where name~"qsfp28"] do={
-            /interface set $i mtu={{ bridge_mtu }} l2mtu={{ bridge_mtu }} }
+            /interface set $i mtu={{ bridge_mtu }} l2mtu={{ bridge_l2mtu }} }
 
     - name: Ensure trunk interfaces are in bridge
       tags: [bridge]
@@ -290,6 +308,51 @@
     # =================================================================
     # VLANs — create only if missing, update in-place
     # =================================================================
+
+    # Holodeck (nested VCF) needs its VLAN ranges carried (tagged) on the
+    # physical fabric. Per the 9.1 docs these are two sites driven by
+    # VLANRangeStart: Site A = 16 consecutive VLANs (always), Site B = 19
+    # consecutive (dual-site / NSX Federation / DR only). site_a_start /
+    # site_b_start map directly to VLANRangeStart = [site_a, site_b]. The VLAN
+    # name records the canonical Holodeck id (10-25 / 40-58) for traceability.
+    # All pure L2 — the Holo-Router does the routing. https://github.com/vmware/Holodeck
+    - name: Build Holodeck Site A transit VLANs (16 consecutive)
+      tags: [vlans, holodeck]
+      when: holodeck.enabled | default(false)
+      ansible.builtin.set_fact:
+        holodeck_vlans: >-
+          {{ (holodeck_vlans | default([])) + [{
+            'id': item,
+            'name': 'holodeck-a-vlan' ~ (10 + item - holodeck.site_a_start),
+            'mtu': holodeck.mtu,
+            'tagged_groups': holodeck.tagged_groups
+          }] }}
+      loop: "{{ range(holodeck.site_a_start, holodeck.site_a_start + 16) | list }}"
+      loop_control:
+        label: "Site A VLAN {{ item }} (Holodeck {{ 10 + item - holodeck.site_a_start }})"
+
+    - name: Build Holodeck Site B transit VLANs (19 consecutive, dual-site only)
+      tags: [vlans, holodeck]
+      when:
+        - holodeck.enabled | default(false)
+        - holodeck.dual_site | default(false)
+      ansible.builtin.set_fact:
+        holodeck_vlans: >-
+          {{ (holodeck_vlans | default([])) + [{
+            'id': item,
+            'name': 'holodeck-b-vlan' ~ (40 + item - holodeck.site_b_start),
+            'mtu': holodeck.mtu,
+            'tagged_groups': holodeck.tagged_groups
+          }] }}
+      loop: "{{ range(holodeck.site_b_start, holodeck.site_b_start + 19) | list }}"
+      loop_control:
+        label: "Site B VLAN {{ item }} (Holodeck {{ 40 + item - holodeck.site_b_start }})"
+
+    - name: Append Holodeck VLANs to the VLAN list
+      tags: [vlans, holodeck]
+      when: holodeck.enabled | default(false)
+      ansible.builtin.set_fact:
+        vlans: "{{ vlans + (holodeck_vlans | default([])) }}"
 
     - name: Build tagged interface list per VLAN
       tags: [vlans]
@@ -556,7 +619,9 @@
 
     # =================================================================
     # BGP — idempotent configuration
-    # Uses the RouterOS API (port 8728) for dotted parameters
+    # Uses the RouterOS API over TLS (port 8729, self-signed local-cert —
+    # hence validate_certs: false) for dotted parameters. The plaintext
+    # API (8728) is disabled by the service-hardening step above.
     # Routing ID and template use 'set' to avoid teardown
     # Filter rules are only rebuilt if the network list has changed
     # =================================================================
@@ -594,8 +659,9 @@
             hostname: "{{ ansible_host }}"
             username: "{{ ansible_user }}"
             password: "{{ mikrotik_api_password }}"
-            tls: false
-            port: 8728
+            tls: true
+            port: 8729
+            validate_certs: false
             path: routing bgp instance
           register: bgp_instances
 
@@ -604,8 +670,9 @@
             hostname: "{{ ansible_host }}"
             username: "{{ ansible_user }}"
             password: "{{ mikrotik_api_password }}"
-            tls: false
-            port: 8728
+            tls: true
+            port: 8729
+            validate_certs: false
             path: routing bgp instance
             add: name=default as={{ bgp_as }} router-id={{ bgp_router_id }}
           when: bgp_instances.result | length == 0
@@ -615,8 +682,9 @@
             hostname: "{{ ansible_host }}"
             username: "{{ ansible_user }}"
             password: "{{ mikrotik_api_password }}"
-            tls: false
-            port: 8728
+            tls: true
+            port: 8729
+            validate_certs: false
             path: routing bgp instance
             update: >-
               .id={{ bgp_instances.result[0]['.id'] }}
@@ -629,8 +697,9 @@
             hostname: "{{ ansible_host }}"
             username: "{{ ansible_user }}"
             password: "{{ mikrotik_api_password }}"
-            tls: false
-            port: 8728
+            tls: true
+            port: 8729
+            validate_certs: false
             path: routing bgp connection
           register: bgp_connections
 
@@ -639,8 +708,9 @@
             hostname: "{{ ansible_host }}"
             username: "{{ ansible_user }}"
             password: "{{ mikrotik_api_password }}"
-            tls: false
-            port: 8728
+            tls: true
+            port: 8729
+            validate_certs: false
             path: routing bgp connection
             add: >-
               name={{ bgp_peer_name }}
@@ -661,8 +731,9 @@
             hostname: "{{ ansible_host }}"
             username: "{{ ansible_user }}"
             password: "{{ mikrotik_api_password }}"
-            tls: false
-            port: 8728
+            tls: true
+            port: 8729
+            validate_certs: false
             path: routing bgp connection
             update: >-
               .id={{ (bgp_connections.result | selectattr('name', 'equalto', bgp_peer_name) | first)['.id'] }}
@@ -683,17 +754,21 @@
         # to decide whether a rebuild is needed. This avoids tearing down and
         # recreating filters on every run, which would cause BGP route flaps.
 
+        # check_mode:false — read-only count; must run during --check too,
+        # otherwise it skips and the set_fact below has no stdout_lines.
         - name: Count existing BGP output filter rules
           community.routeros.command:
             commands:
               - :put [:len [/routing filter rule find where chain={{ bgp_output_filter }}]]
           register: bgp_out_rule_count
+          check_mode: false
 
         - name: Count existing BGP output advertise rules
           community.routeros.command:
             commands:
               - :put [:len [/routing filter rule find where chain={{ bgp_output_filter }} comment~"Advertise"]]
           register: bgp_out_advertise_count
+          check_mode: false
 
         - name: Determine if BGP output filters need rebuild
           ansible.builtin.set_fact:
@@ -738,6 +813,7 @@
             commands:
               - :put [:len [/routing filter rule find where chain={{ bgp_input_filter }}]]
           register: bgp_in_rule_count
+          check_mode: false
 
         - name: Rebuild BGP input filter rules
           when: (bgp_in_rule_count.stdout_lines[0] | last | trim | int) != 2

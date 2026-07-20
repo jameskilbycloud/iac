@@ -201,6 +201,35 @@ The `librouteros` pip dependency is also handled automatically by the first play
 
 ---
 
+## Gotcha: Intel X710/XL710/XXV710 NICs Advertise Their Own Firmware LLDP
+
+If some interfaces show a neighbour in `/ip neighbor` but never pick up a comment, check the `identity` field before assuming the playbook is broken. On a few of my ESXi hosts (Nutanix nodes with Intel XXV710 25GbE adapters), the switch happily reports a neighbour on the port — `discovered-by: lldp` — but with an empty `identity` and `platform`. The playbook's mapping step deliberately does `rejectattr('identity', 'equalto', '')`, so it correctly skips writing a comment rather than labelling the port with nothing useful. That's working as intended; the real problem is upstream.
+
+Intel's X710/XL710/XXV710 family runs its own LLDP agent inside the adapter firmware, independent of whatever Discovery Protocol setting you pick on the ESXi vSwitch or vDS. That firmware agent only sends the mandatory TLVs — Chassis ID and Port ID — with no System Name, which is exactly the blank-identity pattern above. Flipping the vSphere-side setting between CDP and LLDP (or Listen/Advertise/Both) has no effect on these frames at all, because vSphere isn't the one sending them.
+
+The fix lives on the ESXi host, not the switch or vCenter: disable the firmware LLDP agent via the `i40en` driver module parameter (one bit per port, across all Intel NICs on the host):
+
+```bash
+esxcli system module parameters set -m i40en -p "LLDP=0,0,0,0"
+```
+
+Reboot the host (or reload the driver) for it to take effect. With the firmware agent silenced, whatever Discovery Protocol you've configured on the ESXi vSwitch/vDS becomes the only thing advertising on that link. Which protocol to pick, though, turned out to depend on the switch — see the next gotcha.
+
+---
+
+## Gotcha: CDP Didn't Work At All — It's a Hardware Switching Problem, Not an ESXi One
+
+After disabling the firmware LLDP agent above, I set the ESXi distributed switch's Discovery Protocol to CDP with Operation: Both — the usual recommendation, since ESXi's own CDP implementation is generally more consistent than its LLDP support, which varies by NIC vendor. I even disabled and re-enabled it in vCenter to force a clean re-apply. Nothing showed up in `/ip neighbor` at all — not even a blank-identity entry like the firmware LLDP produced. Whatever left the ESXi host, the switch never saw a single CDP frame arrive.
+
+The cause turned out to be entirely on the switch side, and specific to how its ASIC does **hardware switching**. This MikroTik bridge (`br-vcf`) has hardware offloading enabled (`hw=yes` on every bridge port, set by this playbook's provisioning role for performance) — meaning most frames are forwarded directly by the switch chip and never touch the CPU at all. Whether a given multicast destination gets *trapped* to the CPU for software processing (which is what neighbour discovery needs) or just switched in hardware like ordinary traffic depends on the destination MAC address:
+
+- **LLDP** uses `01:80:c2:00:00:0e`, part of the IEEE 802.1Q reserved multicast range that switch silicon is required to trap to the CPU for link-layer control-plane processing — this is why the firmware LLDP frames showed up immediately, blank identity and all.
+- **CDP** uses `01:00:0c:cc:cc:cc`, a Cisco-proprietary address with no such guarantee. With hardware switching enabled, this switch's ASIC just forwards/floods it like any other multicast frame instead of delivering it to RouterOS's neighbour-discovery process on the CPU.
+
+Switching the vDS's Discovery Protocol Type from CDP to LLDP (keeping Operation: Both) fixed it immediately — every previously silent or blank-identity port resolved to a real hostname on the very next check. So the practical takeaway is the opposite of the usual ESXi advice: on switches that hardware-offload their bridging (which includes most MikroTik CRS/CCR gear, not just this one), prefer **LLDP** over CDP for Discovery Protocol, because the bottleneck isn't ESXi's implementation quality at all — it's whether the switch's hardware switching path even lets the frame reach the software that's supposed to read it.
+
+---
+
 ## Summary
 
 The playbook does four things in sequence:
