@@ -29,10 +29,16 @@ interface_groups:
     - qsfp28-2-1   # uk-bhr-p-ntnx-2 (2nd link) — cabled 2026-07-01
     - qsfp28-2-2   # uk-bhr-p-ntnx-1 — was mislabelled "Z840-1"
     - qsfp28-2-3   # uk-bhr-p-ntnx-2 — was mislabelled "Z840-2"
-    - qsfp28-3-1
-    - qsfp28-3-2
-    - qsfp28-3-3
-    - qsfp28-3-4
+    - qsfp28-3-1   # uk-bhr-p-ntnx-1 (2nd link)
+    # RESERVED for the Z840 workstation (not cabled as of 2026-07-20). It needs
+    # the same VLAN set as the ntnx hosts, which membership of `hosts` already
+    # gives it — no further config needed, just cable it in. Deliberately NOT
+    # added to interface_comments.yml: let LLDP label these once the Z840 is
+    # live. Static labels for uncabled kit are exactly how the stale
+    # "Z840-1"/"Z840-2" comments ended up pointing at the ntnx hosts.
+    - qsfp28-3-2   # Z840 link 1 (reserved)
+    - qsfp28-3-3   # Z840 link 2 (reserved)
+    - qsfp28-3-4   # spare
   storage:
     - qsfp28-1-4
     - qsfp28-2-4
