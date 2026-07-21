@@ -39,10 +39,16 @@ All RouterOS API calls share a common set of connection defaults via `module_def
     group/community.routeros.api:
       hostname: "{{ ansible_host }}"
       username: "{{ ansible_user }}"
-      password: "{{ ansible_password }}"
-      tls: false
+      password: "{{ ansible_password | default(mikrotik_api_password) }}"
+      tls: true   # plaintext API (8728) is disabled — see services_disabled
       validate_certs: false
 ```
+
+A note on `tls: true`, because it is worth doing from the start rather than retrofitting: RouterOS exposes the API twice — plaintext on **8728** and TLS on **8729** (`api-ssl`). The plaintext service sends your credentials over the wire in the clear, so there is no good reason to leave it enabled. Disable `api` in your services list and let Ansible use `api-ssl` instead; setting `tls: true` moves the module to 8729 automatically, so you do not need to specify a port.
+
+`validate_certs: false` is doing something specific here and is not simply laziness. A factory RouterOS device generates a self-signed `local-cert` from its own `local-ca`, which no client can chain to a trusted root. Certificate *validation* is therefore off, but the session is still encrypted — you get confidentiality without authentication of the endpoint. On a management VLAN that is a reasonable trade; if you want the full guarantee, issue the switch a certificate from a CA your controller already trusts and turn validation back on.
+
+One sequencing warning if you are retrofitting this onto a live setup: **switch Ansible to `tls: true` and confirm it works _before_ you disable the plaintext `api` service.** Do it the other way around and you will lock automation out of the switch, leaving you on the console to undo it.
 
 ### Step 1 — Fetch neighbours and interfaces
 
