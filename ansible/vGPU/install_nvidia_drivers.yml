@@ -7,7 +7,7 @@
     ansible_python_interpreter: /usr/bin/python3
     # NVIDIA driver configuration - override via inventory, group_vars, or --extra-vars
     nvidia_driver_file: "{{ nvidia_vgpu_driver_file | default('NVIDIA-Linux-x86_64-595.71.05-grid.run') }}"
-    nvidia_licence_file: "{{ nvidia_vgpu_licence_file | default('client_configuration_token_01-16-2026-11-35-14.tok') }}"
+    nvidia_licence_file: "{{ nvidia_vgpu_licence_file | default('client_configuration_token_09-14-2026-15-15-53.tok') }}"
     nvidia_driver_path: "{{ nvidia_vgpu_driver_path | default('/tmp/' ~ nvidia_driver_file) }}"
 
     # NFS share configuration - override via inventory, group_vars, or --extra-vars
