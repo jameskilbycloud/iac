@@ -37,11 +37,22 @@
         name: nvidia-container-toolkit
         state: present
 
+    # Check for the runtime itself, not for daemon.json existing: ../docker's
+    # install_docker.yml now writes daemon.json (log caps, live-restore), so a
+    # `creates: /etc/docker/daemon.json` guard would skip this on fresh hosts.
+    # nvidia-ctk merges into the existing file and keeps those keys.
+    - name: Read daemon.json
+      ansible.builtin.slurp:
+        src: /etc/docker/daemon.json
+      register: docker_daemon_json
+      failed_when: false
+
     - name: Configure NVIDIA runtime for Docker
       become: true
       ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
-      args:
-        creates: /etc/docker/daemon.json
+      when: >-
+        docker_daemon_json.content is not defined or
+        'nvidia' not in ((docker_daemon_json.content | b64decode | from_json).runtimes | default({}))
       notify: Restart Docker service
 
     - name: Ensure NVIDIA vGPU licensing daemon is enabled
