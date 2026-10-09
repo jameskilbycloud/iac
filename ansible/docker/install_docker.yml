@@ -23,6 +23,17 @@
         max-size: "10m"
         max-file: "3"
       live-restore: true
+    # Kernel settings for a busy container host, written to
+    # /etc/sysctl.d/90-homelab-docker.conf (tag: host-tuning).
+    #  - vm.swappiness 10: with plenty of RAM, keep idle container memory in RAM
+    #    instead of swapping it out to grow the page cache (default 60).
+    #  - fs.inotify.max_user_instances 1024: many containers watch folders
+    #    (media servers, *arr apps, document ingest); the default 128 is tight.
+    docker_host_sysctls:
+      vm.swappiness: 10
+      fs.inotify.max_user_instances: 1024
+    # Cap the systemd journal (default is 10% of the filesystem, up to 4G).
+    docker_journald_max_use: 1G
 
   pre_tasks:
     - name: Verify target is Ubuntu
@@ -138,6 +149,40 @@
       notify: Restart Docker service
       tags: [daemon]
 
+    - name: Write host sysctl tuning
+      ansible.builtin.copy:
+        content: |
+          # Managed by Ansible (ansible/docker/install_docker.yml, docker_host_sysctls)
+          {% for key, value in docker_host_sysctls.items() %}
+          {{ key }} = {{ value }}
+          {% endfor %}
+        dest: /etc/sysctl.d/90-homelab-docker.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Apply sysctl settings
+      tags: [host-tuning]
+
+    - name: Ensure journald drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        mode: '0755'
+      tags: [host-tuning]
+
+    - name: Cap journald disk usage
+      ansible.builtin.copy:
+        content: |
+          # Managed by Ansible (ansible/docker/install_docker.yml, docker_journald_max_use)
+          [Journal]
+          SystemMaxUse={{ docker_journald_max_use }}
+        dest: /etc/systemd/journald.conf.d/90-size.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart journald
+      tags: [host-tuning]
+
   handlers:
     - name: Start Docker service
       ansible.builtin.service:
@@ -152,3 +197,12 @@
         name: docker
         state: restarted
         enabled: true
+
+    - name: Apply sysctl settings
+      ansible.builtin.command: sysctl -p /etc/sysctl.d/90-homelab-docker.conf
+
+    # Restarting journald does not affect containers or other services.
+    - name: Restart journald
+      ansible.builtin.service:
+        name: systemd-journald
+        state: restarted
