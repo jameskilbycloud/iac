@@ -8,6 +8,21 @@
     docker_gpg_url: https://download.docker.com/linux/ubuntu/gpg
     docker_gpg_armored_path: /etc/apt/keyrings/docker.asc
     allow_reboot: false
+    # Daemon-wide defaults merged into /etc/docker/daemon.json. Keys already in
+    # the file that are not listed here (e.g. the "nvidia" runtime written by
+    # nvidia-ctk in ../vGPU) are preserved; keys listed here win.
+    #  - log-opts: every container gets capped json-file logs, including ones
+    #    started outside compose (docker run, Portainer agent, DockFlare's
+    #    cloudflared) that never set their own logging block. Only applies to
+    #    containers created after the change.
+    #  - live-restore: containers keep running while dockerd restarts or is
+    #    upgraded. Enabling it needs one daemon restart, which does restart them.
+    docker_daemon_options:
+      log-driver: json-file
+      log-opts:
+        max-size: "10m"
+        max-file: "3"
+      live-restore: true
 
   pre_tasks:
     - name: Verify target is Ubuntu
@@ -94,9 +109,46 @@
         state: latest
       notify: Start Docker service
 
+    - name: Ensure /etc/docker exists
+      ansible.builtin.file:
+        path: /etc/docker
+        state: directory
+        mode: '0755'
+      tags: [daemon]
+
+    - name: Read existing daemon.json
+      ansible.builtin.slurp:
+        src: /etc/docker/daemon.json
+      register: docker_daemon_existing
+      failed_when: false
+      tags: [daemon]
+
+    - name: Write daemon.json (existing keys merged with docker_daemon_options)
+      ansible.builtin.copy:
+        content: >-
+          {{ ((docker_daemon_existing.content | b64decode | from_json)
+              if docker_daemon_existing.content is defined else {})
+             | combine(docker_daemon_options, recursive=true)
+             | to_nice_json(indent=4) }}
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+        validate: dockerd --validate --config-file %s
+      notify: Restart Docker service
+      tags: [daemon]
+
   handlers:
     - name: Start Docker service
       ansible.builtin.service:
         name: docker
         state: started
+        enabled: true
+
+    # Restarts every container once (live-restore only protects restarts after
+    # it is already active). Containers with a restart policy come back.
+    - name: Restart Docker service
+      ansible.builtin.service:
+        name: docker
+        state: restarted
         enabled: true

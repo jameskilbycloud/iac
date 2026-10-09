@@ -62,6 +62,7 @@ ansible docker_hosts -i inventory.ini -m shell -a "docker compose version"
 5. **Adds Repository**: Configures Docker's official APT repository
 6. **Installs Docker**: Installs Docker CE, CLI, containerd, and plugins
 7. **Enables Service**: Ensures Docker service starts automatically on boot
+8. **Configures the daemon**: Merges `docker_daemon_options` into `/etc/docker/daemon.json` (capped logs, live-restore) and restarts Docker if it changed — see [Daemon configuration](#daemon-configuration)
 
 ## Playbook Details
 
@@ -81,6 +82,30 @@ ansible docker_hosts -i inventory.ini -m shell -a "docker compose version"
 |----------|---------|-------------|
 | `docker_gpg_path` | `/etc/apt/keyrings/docker.gpg` | Path to Docker GPG key |
 | `docker_repo` | Docker official repository | APT repository configuration |
+| `allow_reboot` | `false` | Reboot automatically when `/var/run/reboot-required` exists |
+| `docker_daemon_options` | log caps + live-restore | Keys merged into `/etc/docker/daemon.json` (see below) |
+
+### Daemon configuration
+
+The playbook merges `docker_daemon_options` into `/etc/docker/daemon.json`. Keys already in the file are kept, so the `nvidia` runtime written by `../vGPU/install_nvidia_containertoolkit.yml` survives. Keys in `docker_daemon_options` override existing ones. The file is checked with `dockerd --validate` before it is written.
+
+```json
+{
+    "live-restore": true,
+    "log-driver": "json-file",
+    "log-opts": { "max-file": "3", "max-size": "10m" }
+}
+```
+
+- **Log caps** apply to every container, including ones started outside compose (`docker run`, Portainer agent, DockFlare's cloudflared). They only apply to containers created **after** the change. Existing ones keep their old log config until recreated. Compose files that set their own `logging:` block still win.
+- **live-restore** keeps containers running while `dockerd` restarts or is upgraded. Turning it on needs one Docker restart, and that first restart **does** restart every container. Containers with a restart policy come back on their own.
+
+Apply only the daemon settings to an existing host (no package changes):
+
+```bash
+ansible-playbook -i inventory install_docker.yml --tags daemon --check --diff   # preview
+ansible-playbook -i inventory install_docker.yml --tags daemon
+```
 
 ### Reboot Behavior
 
