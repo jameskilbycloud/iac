@@ -84,6 +84,8 @@ ansible docker_hosts -i inventory.ini -m shell -a "docker compose version"
 | `docker_repo` | Docker official repository | APT repository configuration |
 | `allow_reboot` | `false` | Reboot automatically when `/var/run/reboot-required` exists |
 | `docker_daemon_options` | log caps + live-restore | Keys merged into `/etc/docker/daemon.json` (see below) |
+| `docker_host_sysctls` | `vm.swappiness: 10`, `fs.inotify.max_user_instances: 1024` | Written to `/etc/sysctl.d/90-homelab-docker.conf` |
+| `docker_journald_max_use` | `1G` | journald `SystemMaxUse`, via `/etc/systemd/journald.conf.d/90-size.conf` |
 
 ### Daemon configuration
 
@@ -99,6 +101,17 @@ The playbook merges `docker_daemon_options` into `/etc/docker/daemon.json`. Keys
 
 - **Log caps** apply to every container, including ones started outside compose (`docker run`, Portainer agent, DockFlare's cloudflared). They only apply to containers created **after** the change. Existing ones keep their old log config until recreated. Compose files that set their own `logging:` block still win.
 - **live-restore** keeps containers running while `dockerd` restarts or is upgraded. Turning it on needs one Docker restart, and that first restart **does** restart every container. Containers with a restart policy come back on their own.
+
+### Host tuning
+
+Tagged `host-tuning`. It writes the kernel settings in `docker_host_sysctls` and caps the journal at `docker_journald_max_use`. It applies them straight away with `sysctl -p` and a journald restart, which doesn't affect containers.
+
+- **`vm.swappiness` 10**: on a host with plenty of RAM, idle container memory stays in RAM instead of being swapped out to grow the page cache.
+- **`fs.inotify.max_user_instances` 1024**: many containers watch folders (media servers, *arr apps, document ingest), and the default of 128 runs out.
+
+```bash
+ansible-playbook -i inventory install_docker.yml --tags host-tuning
+```
 
 Apply only the daemon settings to an existing host (no package changes):
 
