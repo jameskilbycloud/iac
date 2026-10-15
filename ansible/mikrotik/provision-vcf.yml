@@ -180,6 +180,7 @@
             /interface bridge add name={{ bridge_name }}
             vlan-filtering={{ bridge_vlan_filtering }}
             protocol-mode=rstp mtu={{ bridge_mtu }}
+            priority={{ bridge_stp_priority | default('0x8000') }}
             comment="VCF bridge — Ansible managed" }
 
     - name: Ensure bridge settings are correct
@@ -190,6 +191,7 @@
             /interface bridge set [find name={{ bridge_name }}]
             vlan-filtering={{ bridge_vlan_filtering }}
             protocol-mode=rstp mtu={{ bridge_mtu }}
+            priority={{ bridge_stp_priority | default('0x8000') }}
             comment="VCF bridge — Ansible managed"
 
     - name: Enable hardware offloading on bridge
