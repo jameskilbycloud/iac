@@ -17,6 +17,11 @@ management_ip: "192.168.3.1/24"
 management_gateway: "192.168.3.248"
 default_gateway: "192.168.15.248"   # UniFi on the VLAN 15 transit
 
+# STP — pin sw-1 as root of the bridged domain (sw-1 + sw-2 + the CSS610s
+# behind it). At the default 0x8000 it only won on lowest MAC, so a new switch
+# with a lower MAC would have taken over root.
+bridge_stp_priority: "0x1000"
+
 # Interface groups — referenced by name in vlan tagged_groups
 interface_groups:
   uplink: []   # qsfp28-4-1 (UniFi gateway LAN trunk) disabled 2026-07-01 — see disabled_interfaces
