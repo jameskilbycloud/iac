@@ -9,10 +9,13 @@ system_identity: "vcf-switch-01"
 ntp_server: "time.cloudflare.com"
 enable_ntp_server: true
 
-# Management
+# Management — ether1 is a 10/100, CPU-only port: keep it for management
+# only. Routed traffic leaves via the VLAN 15 transit over qsfp28-1-1 (10G,
+# hardware-routed), so the default route and BGP live there instead.
 management_interface: "ether1"
 management_ip: "192.168.3.1/24"
 management_gateway: "192.168.3.248"
+default_gateway: "192.168.15.248"   # UniFi on the VLAN 15 transit
 
 # Interface groups — referenced by name in vlan tagged_groups
 interface_groups:
@@ -161,6 +164,14 @@ vlans:
       range_end: "192.168.2.200"
       lease_time: "1h"
 
+  # Point-to-point routed transit to the UniFi (.248) over the 10G trunk.
+  # Carries the default route and the BGP session; management stays on ether1.
+  - id: 15
+    name: Transit
+    network: "192.168.15.0/24"
+    tagged_groups:
+      - interswitch
+
   - id: 60
     name: NFS-Storage
     mtu: 9212
@@ -249,8 +260,8 @@ holodeck:
 
 # BGP
 bgp_router_id: "192.168.3.1"
-bgp_local_address: "192.168.3.1"
-bgp_peer_address: "192.168.3.248"
+bgp_local_address: "192.168.15.1"   # VLAN 15 transit
+bgp_peer_address: "192.168.15.248"  # UniFi on the VLAN 15 transit
 bgp_peer_name: "unifi"
 
 bgp_advertise_networks:
