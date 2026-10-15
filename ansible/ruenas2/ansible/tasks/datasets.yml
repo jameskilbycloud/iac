@@ -1,0 +1,48 @@
+---
+# Create any datasets from truenas_datasets that don't exist. Encrypted datasets
+# are created with a passphrase pulled from the vault. The dataset id in the API
+# is "<pool>/<name>" URL-encoded (/ -> %2F).
+
+- name: Check which datasets already exist
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/pool/dataset/id/{{ (truenas_pool ~ '/' ~ item.name) | replace('/', '%2F') }}"
+    method: GET
+    headers: "{{ truenas_headers }}"
+    validate_certs: "{{ truenas_validate_certs }}"
+    status_code: [200, 404]
+  register: tn_ds_check
+  loop: "{{ truenas_datasets }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Create missing datasets
+  vars:
+    ds: "{{ item.0 }}"
+    already_exists: "{{ item.1.status == 200 }}"
+    base_body:
+      name: "{{ truenas_pool }}/{{ item.0.name }}"
+      type: FILESYSTEM
+      comments: "{{ item.0.comment | default('') }}"
+      compression: "{{ item.0.compression | default('LZ4') }}"
+    enc_body:
+      encryption: true
+      inherit_encryption: false
+      encryption_options:
+        generate_key: false
+        algorithm: "{{ item.0.algorithm | default('AES-256-GCM') }}"
+        passphrase: "{{ truenas_dataset_passphrases[item.0.passphrase_key | default(item.0.name)] }}"
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/pool/dataset"
+    method: POST
+    headers: "{{ truenas_headers }}"
+    body_format: json
+    body: "{{ base_body | combine(enc_body if (ds.encrypted | default(false)) else {}) }}"
+    status_code: [200, 201]
+    validate_certs: "{{ truenas_validate_certs }}"
+  loop: "{{ truenas_datasets | zip(tn_ds_check.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}{{ ' (encrypted)' if (item.0.encrypted | default(false)) else '' }}"
+  when: not already_exists
+  # Passphrase is in the body — never log encrypted-dataset creations.
+  no_log: "{{ ds.encrypted | default(false) }}"

@@ -1,0 +1,40 @@
+---
+# Create NFS exports that don't already exist. NFS shares have no name — they
+# are identified by their path. On modern SCALE (24.10+) the share object uses
+# a single `path` field; this matches on that.
+- name: Fetch existing NFS shares
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/sharing/nfs?limit=0"
+    method: GET
+    headers: "{{ truenas_headers }}"
+    validate_certs: "{{ truenas_validate_certs }}"
+  register: tn_existing_nfs
+  no_log: true
+
+- name: Compute already-exported paths
+  ansible.builtin.set_fact:
+    tn_existing_nfs_paths: >-
+      {{ (tn_existing_nfs.json | selectattr('path', 'defined') | map(attribute='path') | list)
+         + (tn_existing_nfs.json | selectattr('paths', 'defined') | map(attribute='paths') | flatten | list) }}
+
+- name: Create missing NFS shares
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/sharing/nfs"
+    method: POST
+    headers: "{{ truenas_headers }}"
+    body_format: json
+    body:
+      path: "/mnt/{{ truenas_pool }}/{{ item.dataset }}"
+      comment: "{{ item.comment | default('') }}"
+      networks: "{{ item.networks | default([]) }}"
+      hosts: "{{ item.hosts | default([]) }}"
+      maproot_user: "{{ item.maproot_user | default(omit) }}"
+      maproot_group: "{{ item.maproot_group | default(omit) }}"
+      ro: "{{ item.readonly | default(false) }}"
+      enabled: "{{ item.enabled | default(true) }}"
+    status_code: [200, 201]
+    validate_certs: "{{ truenas_validate_certs }}"
+  loop: "{{ truenas_nfs_shares }}"
+  loop_control:
+    label: "/mnt/{{ truenas_pool }}/{{ item.dataset }}"
+  when: "('/mnt/' ~ truenas_pool ~ '/' ~ item.dataset) not in tn_existing_nfs_paths"

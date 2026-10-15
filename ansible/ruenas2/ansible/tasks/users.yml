@@ -1,0 +1,53 @@
+---
+# Create any users from truenas_users that don't already exist. TrueNAS wants
+# the *primary key* (id) of the primary group and of each supplementary group,
+# so we build a name -> id map first.
+- name: Fetch groups (for id mapping)
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/group?limit=0"
+    method: GET
+    headers: "{{ truenas_headers }}"
+    validate_certs: "{{ truenas_validate_certs }}"
+  register: tn_groups_for_users
+  no_log: true
+
+- name: Build group name -> id map
+  ansible.builtin.set_fact:
+    tn_group_ids: >-
+      {{ dict(tn_groups_for_users.json | map(attribute='group')
+              | zip(tn_groups_for_users.json | map(attribute='id'))) }}
+
+- name: Fetch existing users
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/user?limit=0"
+    method: GET
+    headers: "{{ truenas_headers }}"
+    validate_certs: "{{ truenas_validate_certs }}"
+  register: tn_existing_users
+  no_log: true
+
+- name: Create missing users
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/user"
+    method: POST
+    headers: "{{ truenas_headers }}"
+    body_format: json
+    body:
+      username: "{{ item.username }}"
+      full_name: "{{ item.full_name }}"
+      uid: "{{ item.uid | default(omit) }}"
+      group: "{{ tn_group_ids[item.primary_group] }}"
+      group_create: false
+      groups: "{{ item.groups | default([]) | map('extract', tn_group_ids) | list }}"
+      home: "{{ item.home | default('/var/empty') }}"
+      home_create: false
+      shell: "{{ item.shell | default('/usr/bin/bash') }}"
+      smb: "{{ item.smb | default(true) }}"
+      password: "{{ truenas_user_passwords[item.username] }}"
+    status_code: [200, 201]
+    validate_certs: "{{ truenas_validate_certs }}"
+  loop: "{{ truenas_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.username not in (tn_existing_users.json | map(attribute='username') | list)
+  no_log: true

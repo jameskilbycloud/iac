@@ -1,0 +1,28 @@
+---
+# Create any groups from truenas_groups that don't already exist.
+# (TrueNAS group objects expose the group name in the `group` field.)
+- name: Fetch existing groups
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/group?limit=0"
+    method: GET
+    headers: "{{ truenas_headers }}"
+    validate_certs: "{{ truenas_validate_certs }}"
+  register: tn_existing_groups
+  no_log: true
+
+- name: Create missing groups
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/group"
+    method: POST
+    headers: "{{ truenas_headers }}"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      gid: "{{ item.gid | default(omit) }}"
+      smb: "{{ item.smb | default(true) }}"
+    status_code: [200, 201]
+    validate_certs: "{{ truenas_validate_certs }}"
+  loop: "{{ truenas_groups }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name not in (tn_existing_groups.json | map(attribute='group') | list)

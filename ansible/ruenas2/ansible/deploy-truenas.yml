@@ -1,0 +1,71 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Fully deploy a TrueNAS SCALE server: groups, users, (encrypted) datasets,
+# POSIX permissions, and SMB + NFS shares — all declared in
+# group_vars/all/vars.yml and secured via group_vars/all/vault.yml.
+#
+# Runs on the control node and drives the TrueNAS REST API over HTTPS.
+#
+# Usage:
+#   ansible-playbook deploy-truenas.yml --ask-vault-pass
+#   ansible-playbook deploy-truenas.yml --ask-vault-pass --tags datasets
+#   ansible-playbook deploy-truenas.yml --ask-vault-pass --check   # dry-ish run
+#
+# Tags: preflight, groups, users, datasets, permissions, shares, smb, nfs,
+#       services.
+# ─────────────────────────────────────────────────────────────────────────────
+
+- name: Deploy TrueNAS SCALE
+  hosts: truenas
+  gather_facts: false
+  vars:
+    # Bearer-token auth header reused by every API call. no_log at call sites
+    # keeps the key out of output.
+    truenas_headers:
+      Authorization: "Bearer {{ truenas_api_key }}"
+      Content-Type: "application/json"
+
+  pre_tasks:
+    - name: Fail early if the vault has not been configured
+      ansible.builtin.assert:
+        that:
+          - truenas_api_key is defined
+          - truenas_api_key != "1-CHANGE-ME"
+        fail_msg: >-
+          truenas_api_key is missing or still the placeholder. Copy
+          group_vars/all/vault.yml.example to vault.yml, set real values,
+          and `ansible-vault encrypt vault.yml`.
+      tags: always
+
+  tasks:
+    - name: Preflight — verify API reachability
+      ansible.builtin.import_tasks: tasks/preflight.yml
+      tags: [always, preflight]
+
+    - name: Groups
+      ansible.builtin.import_tasks: tasks/groups.yml
+      tags: [groups]
+
+    - name: Users
+      ansible.builtin.import_tasks: tasks/users.yml
+      tags: [users]
+
+    - name: Datasets
+      ansible.builtin.import_tasks: tasks/datasets.yml
+      tags: [datasets]
+
+    - name: Permissions
+      ansible.builtin.import_tasks: tasks/permissions.yml
+      tags: [permissions]
+
+    - name: SMB shares
+      ansible.builtin.import_tasks: tasks/smb.yml
+      tags: [shares, smb]
+
+    - name: NFS shares
+      ansible.builtin.import_tasks: tasks/nfs.yml
+      tags: [shares, nfs]
+
+    - name: Services (enable + start SMB/NFS)
+      ansible.builtin.import_tasks: tasks/services.yml
+      tags: [services, shares]

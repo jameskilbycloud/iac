@@ -1,0 +1,37 @@
+---
+# Confirm the API endpoint answers and the key authenticates before we start
+# creating things.
+- name: Ping the TrueNAS middleware
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/core/ping"
+    method: GET
+    headers: "{{ truenas_headers }}"
+    validate_certs: "{{ truenas_validate_certs }}"
+    return_content: true
+  register: tn_ping
+  no_log: true
+
+- name: Show connected system
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/system/info"
+    method: GET
+    headers: "{{ truenas_headers }}"
+    validate_certs: "{{ truenas_validate_certs }}"
+  register: tn_sysinfo
+  no_log: true
+
+- name: Report target
+  ansible.builtin.debug:
+    msg: >-
+      Connected to {{ tn_sysinfo.json.hostname }} —
+      TrueNAS {{ tn_sysinfo.json.version }} on pool '{{ truenas_pool }}'.
+
+- name: Assert the target pool exists
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/pool?limit=0"
+    method: GET
+    headers: "{{ truenas_headers }}"
+    validate_certs: "{{ truenas_validate_certs }}"
+  register: tn_pools
+  failed_when: truenas_pool not in (tn_pools.json | map(attribute='name') | list)
+  no_log: true

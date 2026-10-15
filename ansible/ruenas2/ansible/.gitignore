@@ -1,0 +1,3 @@
+# Never commit the plaintext vault or the vault password file.
+group_vars/all/vault.yml
+.vault_pass
