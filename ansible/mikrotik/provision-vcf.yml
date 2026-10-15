@@ -639,12 +639,15 @@
         - name: Ensure routing ID exists
           community.routeros.command:
             commands:
+              # RouterOS keeps its own dynamic "main" entry, so match static
+              # entries only — otherwise the guard never fires and the set
+              # trips over the read-only dynamic one.
               - >-
-                :if ([:len [/routing id find name=main]] = 0) do={
+                :if ([:len [/routing id find where name=main and !dynamic]] = 0) do={
                 /routing id add id={{ bgp_router_id }} name=main
                 comment="BGP router-id — Ansible managed" }
               - >-
-                /routing id set [find name=main] id={{ bgp_router_id }}
+                /routing id set [find where name=main and !dynamic] id={{ bgp_router_id }}
                 comment="BGP router-id — Ansible managed"
 
         - name: Ensure BGP template exists
