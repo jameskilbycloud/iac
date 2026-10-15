@@ -599,23 +599,63 @@
     # ROUTING — idempotent default route
     # =================================================================
 
+    # default_gateway lets routed traffic leave by a different path than
+    # management (sw-1: VLAN 15 transit vs the 10/100 ether1 port).
     - name: Ensure default route exists
       tags: [routing]
-      when: management_gateway is defined
+      when: default_gateway is defined or management_gateway is defined
+      vars:
+        _default_gw: "{{ default_gateway | default(management_gateway) }}"
       community.routeros.command:
         commands:
           - >-
-            :if ([:len [/ip route find
-            dst-address="0.0.0.0/0" gateway={{ management_gateway }} !dynamic]] = 0) do={
-            :do { /ip route remove [find dst-address="0.0.0.0/0" !dynamic] } on-error={};
-            /ip route add dst-address=0.0.0.0/0 gateway={{ management_gateway }}
+            :if ([:len [/ip route find dst-address="0.0.0.0/0" routing-table=main
+            gateway={{ _default_gw }} !dynamic]] = 0) do={
+            :do { /ip route remove [find dst-address="0.0.0.0/0" routing-table=main !dynamic] } on-error={};
+            /ip route add dst-address=0.0.0.0/0 gateway={{ _default_gw }}
             comment="Default route to gateway — Ansible managed" }
           # Keep the comment in step on a pre-existing route too (it still
           # said "Watchguard" long after the UniFi replaced it).
           - >-
-            /ip route set [find dst-address="0.0.0.0/0"
-            gateway={{ management_gateway }} !dynamic]
+            /ip route set [find dst-address="0.0.0.0/0" routing-table=main
+            gateway={{ _default_gw }} !dynamic]
             comment="Default route to gateway — Ansible managed"
+
+    # When routed traffic leaves by default_gateway but management lives on
+    # another interface, replies sourced from the management IP would follow
+    # the main default route out the wrong way and be dropped by the gateway's
+    # reverse-path checks. Send them back via management_gateway instead:
+    # rule 1 uses main for everything except its default route (min-prefix=0),
+    # rule 2 catches the rest with a management-only default route.
+    - name: Ensure management return path
+      tags: [routing]
+      when:
+        - default_gateway is defined
+        - management_gateway is defined
+        - default_gateway != management_gateway
+      vars:
+        _mgmt_src: "{{ management_ip | ansible.utils.ipaddr('address') }}/32"
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/routing table find name=mgmt]] = 0) do={
+            /routing table add name=mgmt fib
+            comment="Management return path via {{ management_interface }} — Ansible managed" }
+          - >-
+            :if ([:len [/ip route find dst-address="0.0.0.0/0" routing-table=mgmt !dynamic]] = 0) do={
+            /ip route add dst-address=0.0.0.0/0 gateway={{ management_gateway }} routing-table=mgmt
+            comment="Mgmt default via {{ management_interface }} — Ansible managed" }
+          - >-
+            /ip route set [find dst-address="0.0.0.0/0" routing-table=mgmt !dynamic]
+            gateway={{ management_gateway }}
+          - >-
+            :if ([:len [/routing rule find src-address="{{ _mgmt_src }}" table=main]] = 0) do={
+            /routing rule add src-address={{ _mgmt_src }} action=lookup table=main min-prefix=0
+            comment="Mgmt: main table except default — Ansible managed" }
+          - >-
+            :if ([:len [/routing rule find src-address="{{ _mgmt_src }}" table=mgmt]] = 0) do={
+            /routing rule add src-address={{ _mgmt_src }} action=lookup table=mgmt
+            comment="Mgmt: default via {{ management_interface }} — Ansible managed" }
 
     - name: Enable IP forwarding
       tags: [routing]
@@ -891,4 +931,4 @@
             DHCP:       {{ dhcp_vlans | default([]) | map(attribute='name') | join(', ') | default('disabled') }}
             BGP:        {{ 'AS ' ~ bgp_as ~ ' -> ' ~ bgp_peer_address ~ ' (' ~ bgp_peer_name ~ ')' if enable_bgp | default(false) else 'disabled' }}
             BGP filter: {{ 'unchanged' if not (bgp_out_needs_rebuild | default(false) | bool) else 'rebuilt' }}
-            Gateway:    {{ management_gateway | default('none') }}
+            Gateway:    {{ default_gateway | default(management_gateway) | default('none') }}
