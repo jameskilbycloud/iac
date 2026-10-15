@@ -2,6 +2,7 @@
 # VCF provisioning configuration for mikrotik-sw-1 (192.168.3.1)
 
 system_identity: "vcf-switch-01"
+switch_role: vcf   # provision-vcf.yml only runs against switch_role: vcf
 
 # NTP — this switch IS ntp-1.jameskilby.cloud, the lab's NTP server, so it
 # can't sync from itself: it syncs from Cloudflare upstream and serves NTP

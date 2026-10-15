@@ -46,3 +46,19 @@ Configurations are saved to the `configs/` directory with timestamps:
 The playbook uses SSH key authentication with the `admin` user. Ensure your private key (`~/.ssh/id_rsa`) is configured for access to the Mikrotik devices.
 
 If using a different key, update `ansible_ssh_private_key_file` in `inventory.yml`.
+
+## Provisioning
+
+| Playbook | Hosts (`switch_role`) | Purpose |
+|----------|----------------------|---------|
+| `provision-vcf.yml` | `vcf` — mikrotik-sw-1 | VCF switch: bridge, VLANs + SVIs, DHCP, BGP to the UniFi, VLAN 15 transit |
+| `provision-sw-2.yml` | `l2_aggregation` — mikrotik-sw-2 | L2 aggregation switch: bridge VLAN table, management SVI, hardening, SNMP |
+| `update_interface_comments.yml` | all | Port comments from LLDP neighbours (+ static overrides) |
+
+Both provisioning playbooks target `mikrotik_switches` and skip any host whose
+`switch_role` (set in `host_vars/<host>/`) doesn't match, so running one
+without `--limit` can't reconfigure the other switch.
+
+Secrets live in `host_vars/<host>/secrets.yml` (gitignored — see the
+`secrets.yml.example` next to it). sw-2's SNMP community is one of them; the
+SNMP task is skipped if it isn't set.

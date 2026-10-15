@@ -15,6 +15,9 @@
 #   - BGP peering with routing filters
 #   - Static routing and IP forwarding
 #
+# Only runs against hosts with switch_role: vcf (host_vars); other switches
+# in the group are skipped — sw-2 uses provision-sw-2.yml.
+#
 # Usage:
 #   ansible-playbook -i inventory.yml provision-vcf.yml
 #   ansible-playbook -i inventory.yml provision-vcf.yml --limit mikrotik-sw-1
@@ -26,6 +29,14 @@
   gather_facts: no
 
   tasks:
+
+    # mikrotik_switches also holds non-VCF switches (sw-2 is a plain L2
+    # aggregation switch with its own playbook). This play tears down any
+    # bridge named "bridge", so refuse to touch a host not marked as VCF.
+    - name: Skip switches that are not VCF switches
+      tags: [always]
+      when: switch_role | default('') != 'vcf'
+      ansible.builtin.meta: end_host
 
     # =================================================================
     # BACKUP

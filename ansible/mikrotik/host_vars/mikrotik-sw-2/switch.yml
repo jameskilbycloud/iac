@@ -1,0 +1,116 @@
+---
+# mikrotik-sw-2 (192.168.3.2) — CRS305-1G-4S+, plain L2 aggregation switch.
+# Applied by provision-sw-2.yml. Captured from the live config 2026-10-15.
+#
+# Topology (LLDP): every SFP+ port is an uplink to another part of the network.
+#   sfp-sfpplus1  MikroTikOffice (CSS610-8P, shed)
+#   sfp-sfpplus2  ServerSwitch (CSS610-8G, server rack — sw-1 ether1 mgmt hangs off it)
+#   sfp-sfpplus3  vcf-switch-01 qsfp28-1-1 (10G DAC breakout)
+#   sfp-sfpplus4  Dream-Machine-Beast (UniFi gateway) + MikroTikPOEHous
+# No routing: the only IP is management on VLAN 3. The VLAN 15 transit between
+# sw-1 and the UniFi passes straight through at L2.
+
+switch_role: l2_aggregation   # provision-sw-2.yml only runs against this role
+
+system_identity: "MikroTik10G"
+
+# Group default enables BGP for the VCF playbook; sw-2 doesn't route.
+enable_bgp: false
+
+# Management — SVI on the bridge (sw-2 has no dedicated management port)
+management_vlan: 3
+management_interface: "vlan3-mgmt"
+management_ip: "192.168.3.2/24"
+management_gateway: "192.168.3.248"
+
+# Bridge — keeps the factory name. sw-1 is root at 0x1000; sw-2 at 0x2000 is
+# the deterministic backup root ahead of the default-priority CSS610s.
+bridge_name: "bridge"
+bridge_stp_priority: "0x2000"
+
+# Port MTU as found (l2mtu 9216 caps VLAN interfaces at 9212 — fine here, the
+# only VLAN interface is 1500-byte management).
+port_mtu: 9216
+port_l2mtu: 9216
+
+interface_groups:
+  uplinks:
+    - sfp-sfpplus1
+    - sfp-sfpplus2
+    - sfp-sfpplus3
+    - sfp-sfpplus4
+  vcf:            # VCF VLANs 100/101 are only carried towards sw-1 and the shed
+    - sfp-sfpplus1
+    - sfp-sfpplus3
+  native_vlan1:   # VLAN 1 untagged (PVID 1) towards the rack and the house
+    - sfp-sfpplus2
+    - sfp-sfpplus4
+  vlan1_tagged:   # ...and tagged towards the shed and sw-1 (sw-1 treats it as
+    - sfp-sfpplus1   # native on qsfp28-1-1 — asymmetric but works; VMs on sw-1
+    - sfp-sfpplus3   # use untagged VLAN 1, so change both ends together)
+
+bridge_ports: "{{ interface_groups.uplinks }}"
+
+# DAC to sw-1's breakout lane needs a forced speed
+interface_speed_overrides:
+  - name: sfp-sfpplus3
+    speed: 10G-baseCR
+    auto_negotiation: false
+
+disabled_interfaces:
+  - ether1   # unused 1G copper port
+
+# Bridge VLAN table. `bridge: true` tags the bridge itself (needed for a VLAN
+# with a switch IP on it — management only).
+switch_vlans:
+  - id: 1
+    name: Native
+    tagged_groups: [vlan1_tagged]
+    untagged_groups: [native_vlan1]
+  - id: 2
+    name: DMZ
+    tagged_groups: [uplinks]
+  - id: 3
+    name: NetMan
+    bridge: true
+    tagged_groups: [uplinks]
+  - id: 4
+    name: ServerVLAN
+    tagged_groups: [uplinks]
+  - id: 15
+    name: Transit   # sw-1 192.168.15.1 <-> UniFi 192.168.15.248
+    tagged_groups: [uplinks]
+  - id: 20
+    name: VLAN20
+    tagged_groups: [uplinks]
+  - id: 24
+    name: IOT
+    tagged_groups: [uplinks]
+  - id: 38
+    name: VMware-Management
+    tagged_groups: [uplinks]
+  - id: 39
+    name: vMotion-Legacy
+    tagged_groups: [uplinks]
+  - id: 40
+    name: vSAN-Legacy
+    tagged_groups: [uplinks]
+  - id: 60
+    name: NFS-Storage
+    tagged_groups: [uplinks]
+  - id: 61
+    name: iscsi2-Legacy
+    tagged_groups: [uplinks]
+  - id: 100
+    name: VCF-Management
+    tagged_groups: [vcf]
+  - id: 101
+    name: VCF-vMotion
+    tagged_groups: [vcf]
+
+# SNMP — read-only v2c, polled from the management subnet. The community
+# string lives in secrets.yml (this repo is public); without it the SNMP task
+# is skipped rather than falling back to the group default.
+enable_snmp: true
+snmp_location: "ServerRack"
+snmp_allowed_addresses: "192.168.3.0/24"
