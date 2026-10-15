@@ -65,6 +65,14 @@
                 permanent: true
         websecure:
           address: ":{{ traefik_port_websecure }}"
+          transport:
+            respondingTimeouts:
+              # readTimeout covers reading the whole request including the body,
+              # and defaults to 60s in v3 - far too short for multi-gigabyte
+              # uploads such as the VCF offline bundle server. Set to 0 to
+              # disable the limit entirely.
+              readTimeout: "{{ traefik_read_timeout | default('3600s') }}"
+              idleTimeout: "{{ traefik_idle_timeout | default('180s') }}"
 
       # Provider configuration
       providers:

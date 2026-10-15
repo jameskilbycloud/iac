@@ -210,6 +210,8 @@ Visit `https://test.example.com` to verify the test nginx service is accessible 
 | `traefik_config_dir` | `/opt/traefik` | Configuration directory |
 | `log_level` | `INFO` | Log level (DEBUG, INFO, WARN, ERROR) |
 | `acme_delay_before_check` | `30` | DNS propagation delay (seconds) |
+| `traefik_read_timeout` | `3600s` | Max time to read a whole request including the body on `websecure`. Traefik's own default is `60s`, which breaks large uploads such as the [VCF offline bundle server](../VCF/README.md). `0` disables the limit |
+| `traefik_idle_timeout` | `180s` | Keep-alive idle timeout on `websecure` |
 
 ## Troubleshooting
 
