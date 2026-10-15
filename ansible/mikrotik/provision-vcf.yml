@@ -610,6 +610,12 @@
             :do { /ip route remove [find dst-address="0.0.0.0/0" !dynamic] } on-error={};
             /ip route add dst-address=0.0.0.0/0 gateway={{ management_gateway }}
             comment="Default route to gateway — Ansible managed" }
+          # Keep the comment in step on a pre-existing route too (it still
+          # said "Watchguard" long after the UniFi replaced it).
+          - >-
+            /ip route set [find dst-address="0.0.0.0/0"
+            gateway={{ management_gateway }} !dynamic]
+            comment="Default route to gateway — Ansible managed"
 
     - name: Enable IP forwarding
       tags: [routing]
@@ -748,6 +754,26 @@
               input.filter={{ bgp_input_filter }}
               disabled=no
           when: bgp_connections.result | selectattr('name', 'equalto', bgp_peer_name) | list | length > 0
+
+        # A hand-added duplicate ("Unifi Beast") once sat alongside the managed
+        # connection to the same peer; only one session can form, so drop any
+        # connection to the peer that isn't the managed one.
+        - name: Remove duplicate BGP connections to the peer
+          community.routeros.api:
+            hostname: "{{ ansible_host }}"
+            username: "{{ ansible_user }}"
+            password: "{{ mikrotik_api_password }}"
+            tls: true
+            port: 8729
+            validate_certs: false
+            path: routing bgp connection
+            remove: "{{ item['.id'] }}"
+          # Keys are literally "remote.address" — selectattr would treat the dot
+          # as nesting, so filter with item[...] instead.
+          loop: "{{ bgp_connections.result | rejectattr('name', 'equalto', bgp_peer_name) | list }}"
+          when: item['remote.address'] | default('') == bgp_peer_address
+          loop_control:
+            label: "{{ item.name }}"
 
         # --- BGP filter rules: only rebuild if the rule count has changed ---
         # We check total rule count and number of "Advertise" rules (via comment~)
