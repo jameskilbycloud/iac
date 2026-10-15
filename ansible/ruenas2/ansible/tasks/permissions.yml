@@ -1,0 +1,52 @@
+---
+# Apply owner/group/mode to each dataset root. The permission endpoint runs as
+# an async middleware job, so we capture the job ids and wait for them.
+
+- name: Set ownership + mode on datasets
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/pool/dataset/id/{{ (truenas_pool ~ '/' ~ item.name) | replace('/', '%2F') }}/permission"
+    method: POST
+    headers: "{{ truenas_headers }}"
+    body_format: json
+    body:
+      user: "{{ item.owner }}"
+      group: "{{ item.group }}"
+      # API wants the mode as an octal string without a leading 0 (e.g. "770").
+      mode: "{{ '%o' | format(item.mode | default('0770') | int(base=8)) }}"
+      options:
+        recursive: "{{ item.recursive | default(false) }}"
+        traverse: false
+    status_code: [200, 201]
+    validate_certs: "{{ truenas_validate_certs }}"
+  register: tn_perm_jobs
+  loop: "{{ truenas_datasets }}"
+  loop_control:
+    label: "{{ item.name }} -> {{ item.owner }}:{{ item.group }} {{ item.mode | default('0770') }}"
+
+- name: Wait for permission jobs to finish
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/core/get_jobs?limit=0"
+    method: GET
+    headers: "{{ truenas_headers }}"
+    validate_certs: "{{ truenas_validate_certs }}"
+  register: tn_job_poll
+  until: >-
+    (tn_job_poll.json | selectattr('id', 'equalto', item | int) | list
+       | first | default({'state': 'RUNNING'})).state
+      in ['SUCCESS', 'FAILED', 'ABORTED']
+  retries: 30
+  delay: 2
+  loop: "{{ tn_perm_jobs.results | map(attribute='json') | list }}"
+  loop_control:
+    label: "job {{ item }}"
+  no_log: true
+
+- name: Assert all permission jobs succeeded
+  vars:
+    job: "{{ (tn_job_poll.json | selectattr('id', 'equalto', item | int) | list | first) }}"
+  ansible.builtin.assert:
+    that: "job.state == 'SUCCESS'"
+    fail_msg: "Permission job {{ item }} ended in state {{ job.state }}: {{ job.error | default('') }}"
+  loop: "{{ tn_perm_jobs.results | map(attribute='json') | list }}"
+  loop_control:
+    label: "job {{ item }}"

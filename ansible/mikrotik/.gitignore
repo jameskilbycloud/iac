@@ -2,6 +2,11 @@
 configs/*.rsc
 !configs/.gitkeep
 
+# UniFi OS / Network gateway backups (encrypted full-system dumps, not IaC)
+*.unifi
+*.unf
+*.backup
+
 # Secrets (passwords, API keys, etc.)
 **/secrets.yml
 

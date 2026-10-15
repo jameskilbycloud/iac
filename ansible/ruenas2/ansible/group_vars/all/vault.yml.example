@@ -1,0 +1,26 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Secrets for the TrueNAS deployment.
+#
+# Copy this file to `vault.yml` and encrypt it:
+#     cp vault.yml.example vault.yml
+#     # edit real values, then:
+#     ansible-vault encrypt vault.yml
+#
+# vault.yml is git-ignored (see .gitignore). Never commit the plaintext.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# API key: TrueNAS UI -> top-right avatar -> "API Keys" -> Add. Used as a
+# Bearer token. Format looks like "1-xxxxxxxx...".
+truenas_api_key: "1-CHANGE-ME"
+
+# Passphrases for encrypted datasets, keyed by the dataset's `passphrase_key`
+# (falls back to the dataset name). Must be at least 8 characters.
+truenas_dataset_passphrases:
+  personal: "change-me-strong-passphrase"
+  backups: "change-me-another-passphrase"
+
+# Passwords for the users in truenas_users, keyed by username.
+truenas_user_passwords:
+  james: "change-me"
+  familyshare: "change-me"

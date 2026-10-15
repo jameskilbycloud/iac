@@ -1,0 +1,101 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# TrueNAS SCALE deployment — declarative inventory of what should exist.
+#
+# This is the ONE file you edit to describe your NAS. The playbook loops over
+# these lists and creates anything that is missing (idempotent — re-runnable).
+# Secrets (API key, dataset passphrases, user passwords) live in vault.yml.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── API connection ───────────────────────────────────────────────────────────
+truenas_api_url: "https://truenas.jameskilby.cloud/api/v2.0"
+# Set false only if the NAS uses a self-signed cert you haven't trusted.
+truenas_validate_certs: true
+
+# ── Storage pool that everything is created under ────────────────────────────
+truenas_pool: "tank"
+
+# ── Groups ───────────────────────────────────────────────────────────────────
+# gid is optional (TrueNAS auto-assigns from 3000+ if omitted). smb=true makes
+# the group usable for SMB share permissions.
+truenas_groups:
+  - name: media
+    gid: 3000
+  - name: family
+    gid: 3001
+
+# ── Users ────────────────────────────────────────────────────────────────────
+# Passwords come from vault.yml -> truenas_user_passwords[<username>].
+# `primary_group` and `groups` reference names from truenas_groups above.
+truenas_users:
+  - username: james
+    full_name: "James Kilby"
+    uid: 3000
+    primary_group: media
+    groups: [family]
+    shell: /usr/bin/bash
+    smb: true          # can authenticate to SMB shares
+  - username: familyshare
+    full_name: "Family Share Account"
+    uid: 3001
+    primary_group: family
+    groups: []
+    shell: /usr/sbin/nologin
+    smb: true
+
+# ── Datasets ─────────────────────────────────────────────────────────────────
+# `name` is relative to the pool (media -> tank/media).
+# Set `encrypted: true` to encrypt with a passphrase; the passphrase is read
+# from vault.yml -> truenas_dataset_passphrases[<passphrase_key or name>].
+# owner/group must match a user/group above; mode is the POSIX mode applied to
+# the dataset root. Set `recursive: true` to push perms down existing children.
+truenas_datasets:
+  - name: media
+    encrypted: false
+    comment: "Media library — exported to the Docker media stack over NFS"
+    owner: james
+    group: media
+    mode: "0770"
+
+  - name: personal
+    encrypted: true
+    passphrase_key: personal   # -> truenas_dataset_passphrases.personal
+    comment: "Personal files (SMB, encrypted)"
+    owner: james
+    group: family
+    mode: "0770"
+
+  - name: backups
+    encrypted: true
+    passphrase_key: backups
+    comment: "Backups (SMB, encrypted)"
+    owner: james
+    group: family
+    mode: "0770"
+
+# ── SMB shares ───────────────────────────────────────────────────────────────
+# `dataset` references a dataset above; the share path is
+# /mnt/<pool>/<dataset>. `name` is the SMB share name clients connect to.
+truenas_smb_shares:
+  - name: personal
+    dataset: personal
+    comment: "Personal files"
+    purpose: DEFAULT_SHARE
+    enabled: true
+  - name: backups
+    dataset: backups
+    comment: "Backups"
+    purpose: DEFAULT_SHARE
+    enabled: true
+
+# ── NFS shares ───────────────────────────────────────────────────────────────
+# NFS exports are identified by path (no name). Restrict access with
+# `networks` (CIDRs) and/or `hosts`. maproot squashes client root to this user.
+truenas_nfs_shares:
+  - dataset: media
+    comment: "Media export to the Docker host"
+    networks: ["192.168.60.0/24"]
+    hosts: []
+    maproot_user: root
+    maproot_group: root
+    enabled: true

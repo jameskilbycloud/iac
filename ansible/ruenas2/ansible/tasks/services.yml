@@ -1,0 +1,46 @@
+---
+# Enable (start-on-boot) and start the file-sharing services so the shares are
+# actually served. Only touch a protocol if you declared shares for it.
+- name: Enable SMB service at boot
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/service/id/cifs"
+    method: PUT
+    headers: "{{ truenas_headers }}"
+    body_format: json
+    body: { enable: true }
+    status_code: [200, 201]
+    validate_certs: "{{ truenas_validate_certs }}"
+  when: truenas_smb_shares | length > 0
+
+- name: Start SMB service
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/service/start"
+    method: POST
+    headers: "{{ truenas_headers }}"
+    body_format: json
+    body: { service: "cifs" }
+    status_code: [200, 201]
+    validate_certs: "{{ truenas_validate_certs }}"
+  when: truenas_smb_shares | length > 0
+
+- name: Enable NFS service at boot
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/service/id/nfs"
+    method: PUT
+    headers: "{{ truenas_headers }}"
+    body_format: json
+    body: { enable: true }
+    status_code: [200, 201]
+    validate_certs: "{{ truenas_validate_certs }}"
+  when: truenas_nfs_shares | length > 0
+
+- name: Start NFS service
+  ansible.builtin.uri:
+    url: "{{ truenas_api_url }}/service/start"
+    method: POST
+    headers: "{{ truenas_headers }}"
+    body_format: json
+    body: { service: "nfs" }
+    status_code: [200, 201]
+    validate_certs: "{{ truenas_validate_certs }}"
+  when: truenas_nfs_shares | length > 0

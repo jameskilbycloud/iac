@@ -1,0 +1,12 @@
+---
+# The playbook talks to the TrueNAS SCALE middleware over its HTTPS REST API,
+# so it runs on the *control node* (connection: local) and never SSHes into the
+# NAS. The API endpoint itself is set by `truenas_api_url` in
+# group_vars/all/vars.yml.
+all:
+  children:
+    truenas:
+      hosts:
+        localhost:
+          ansible_connection: local
+          ansible_python_interpreter: "{{ ansible_playbook_python }}"
