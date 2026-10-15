@@ -1,0 +1,369 @@
+---
+# MikroTik L2 aggregation switch playbook (Idempotent) — mikrotik-sw-2
+#
+# Safe to re-run — every task is add-if-missing or a 'set' to the desired
+# value, so an unchanged run touches nothing and drops no traffic.
+#
+# Configures a plain L2 switch (no routing, no BGP, no DHCP) with the same
+# conventions as provision-vcf.yml on sw-1:
+#   - System basics (identity, timezone, NTP client, DNS)
+#   - Management SVI + default route, checked before anything else changes
+#   - Factory interface names (labels live in comments — see
+#     update_interface_comments.yml), forced speeds, MTU, unused ports disabled
+#   - VLAN-filtering RSTP bridge with ingress filtering and a fixed priority
+#   - Bridge VLAN table from host_vars (interface_groups + switch_vlans)
+#   - Service hardening (no telnet/ftp/http/plaintext API; TLS with local CA)
+#   - Read-only SNMP restricted to the management subnet
+#
+# Only runs against hosts with switch_role: l2_aggregation (host_vars).
+# VLANs present on the switch but missing from switch_vlans are reported,
+# not removed.
+#
+# Usage:
+#   ansible-playbook -i inventory.yml provision-sw-2.yml
+#   ansible-playbook -i inventory.yml provision-sw-2.yml --tags vlans
+
+- name: Provision MikroTik L2 aggregation switch
+  hosts: mikrotik_switches
+  gather_facts: no
+
+  tasks:
+
+    - name: Skip switches that are not L2 aggregation switches
+      tags: [always]
+      when: switch_role | default('') != 'l2_aggregation'
+      ansible.builtin.meta: end_host
+
+    # The management IP lives on a VLAN of the bridge, so a VLAN table that
+    # drops the bridge from the management VLAN would lock us out.
+    - name: Check the management VLAN stays reachable
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - switch_vlans | selectattr('id', 'equalto', management_vlan) | selectattr('bridge', 'defined') | selectattr('bridge') | list | length == 1
+        fail_msg: "switch_vlans must contain VLAN {{ management_vlan }} with bridge: true (management)"
+        quiet: true
+
+    # =================================================================
+    # BACKUP
+    # =================================================================
+
+    - name: Create configuration backup
+      tags: [always]
+      community.routeros.command:
+        commands:
+          - /system backup save name=pre-provision
+      ignore_errors: true
+
+    # =================================================================
+    # SYSTEM BASICS (all use 'set' — naturally idempotent)
+    # =================================================================
+
+    - name: Set system identity
+      tags: [system]
+      community.routeros.command:
+        commands:
+          - /system identity set name={{ system_identity }}
+
+    - name: Set timezone
+      tags: [system]
+      community.routeros.command:
+        commands:
+          - /system clock set time-zone-name={{ system_timezone }}
+
+    - name: Enable NTP client
+      tags: [system]
+      community.routeros.command:
+        commands:
+          - /system ntp client set enabled=yes
+
+    - name: Remove NTP client servers not matching desired upstream
+      tags: [system]
+      community.routeros.command:
+        commands:
+          - >-
+            :foreach i in=[/system ntp client servers find
+            where address!={{ ntp_server }}] do={
+            /system ntp client servers remove $i }
+
+    - name: Add NTP server (if not present)
+      tags: [system]
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/system ntp client servers find
+            address={{ ntp_server }}]] = 0) do={
+            /system ntp client servers add address={{ ntp_server }} }
+
+    - name: Configure DNS servers
+      tags: [system]
+      community.routeros.command:
+        commands:
+          - /ip dns set servers={{ dns_servers }}
+
+    # =================================================================
+    # MANAGEMENT — add-if-missing only, so a run can't cut itself off
+    # =================================================================
+
+    - name: Ensure management VLAN interface, IP and default route
+      tags: [always]
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/interface vlan find name={{ management_interface }}]] = 0) do={
+            /interface vlan add name={{ management_interface }}
+            vlan-id={{ management_vlan }} interface={{ bridge_name }} }
+          - >-
+            /interface vlan set [find name={{ management_interface }}]
+            comment="Management — Ansible managed"
+          - >-
+            :if ([:len [/ip address find address="{{ management_ip }}"
+            interface={{ management_interface }}]] = 0) do={
+            /ip address add address={{ management_ip }}
+            interface={{ management_interface }} }
+          - >-
+            /ip address set [find address="{{ management_ip }}"
+            interface={{ management_interface }}]
+            comment="Management IP — Ansible managed"
+          - >-
+            :if ([:len [/ip route find dst-address="0.0.0.0/0" routing-table=main
+            gateway={{ management_gateway }} !dynamic]] = 0) do={
+            :do { /ip route remove [find dst-address="0.0.0.0/0" routing-table=main !dynamic] } on-error={};
+            /ip route add dst-address=0.0.0.0/0 gateway={{ management_gateway }} }
+          - >-
+            /ip route set [find dst-address="0.0.0.0/0" routing-table=main
+            gateway={{ management_gateway }} !dynamic]
+            comment="Default route (management) — Ansible managed"
+
+    # =================================================================
+    # INTERFACES
+    # =================================================================
+
+    # Renaming doesn't bounce links; bridge ports/VLANs follow the interface.
+    - name: Normalize interface names to factory defaults (labels live in comments)
+      tags: [interfaces]
+      community.routeros.command:
+        commands:
+          - >-
+            :foreach i in=[/interface ethernet find] do={
+            /interface ethernet set $i name=[get $i default-name] }
+
+    - name: Set interface speed overrides
+      tags: [interfaces]
+      community.routeros.command:
+        commands:
+          - >-
+            /interface ethernet set [find default-name={{ item.name }}]
+            speed={{ item.speed }}
+            auto-negotiation={{ 'yes' if item.auto_negotiation | default(true) else 'no' }}
+      loop: "{{ interface_speed_overrides | default([]) }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ item.speed }}"
+
+    - name: Set MTU on bridge ports
+      tags: [interfaces]
+      community.routeros.command:
+        commands:
+          - /interface ethernet set [find default-name={{ item }}] mtu={{ port_mtu }} l2mtu={{ port_l2mtu }}
+      loop: "{{ bridge_ports }}"
+
+    - name: Ensure bridge ports are enabled
+      tags: [interfaces]
+      community.routeros.command:
+        commands:
+          - /interface ethernet set [find default-name={{ item }}] disabled=no
+      loop: "{{ bridge_ports }}"
+
+    - name: Disable unused interfaces
+      tags: [interfaces]
+      community.routeros.command:
+        commands:
+          - :do { /interface bridge port remove [find interface={{ item }}] } on-error={}
+          - >-
+            /interface ethernet set [find default-name={{ item }}] disabled=yes
+            comment="Unused port — disabled by Ansible"
+      loop: "{{ disabled_interfaces | default([]) }}"
+
+    # =================================================================
+    # BRIDGE
+    # =================================================================
+
+    - name: Create bridge if not present
+      tags: [bridge]
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/interface bridge find name={{ bridge_name }}]] = 0) do={
+            /interface bridge add name={{ bridge_name }} vlan-filtering=yes
+            protocol-mode=rstp priority={{ bridge_stp_priority }} }
+
+    - name: Ensure bridge settings are correct
+      tags: [bridge]
+      community.routeros.command:
+        commands:
+          - >-
+            /interface bridge set [find name={{ bridge_name }}]
+            vlan-filtering=yes protocol-mode=rstp
+            priority={{ bridge_stp_priority }}
+            ingress-filtering=yes
+            comment="L2 aggregation bridge — Ansible managed"
+
+    - name: Ensure ports are in the bridge (hardware offloaded, ingress filtering)
+      tags: [bridge]
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/interface bridge port find
+            interface={{ item }} bridge={{ bridge_name }}]] = 0) do={
+            :do { /interface bridge port remove [find interface={{ item }}] } on-error={};
+            /interface bridge port add bridge={{ bridge_name }} interface={{ item }} hw=yes }
+          - >-
+            /interface bridge port set [find interface={{ item }} bridge={{ bridge_name }}]
+            hw=yes ingress-filtering=yes pvid=1
+            comment="Uplink port — Ansible managed"
+      loop: "{{ bridge_ports }}"
+
+    # =================================================================
+    # VLANs — bridge VLAN table, add-if-missing then set in place
+    # =================================================================
+
+    - name: Ensure bridge VLAN entries
+      tags: [vlans]
+      vars:
+        _tagged: >-
+          {{ ([bridge_name] if item.bridge | default(false) else [])
+             + (item.tagged_groups | default([]) | map('extract', interface_groups) | flatten) }}
+        _untagged: >-
+          {{ item.untagged_groups | default([]) | map('extract', interface_groups) | flatten }}
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/interface bridge vlan find
+            vlan-ids={{ item.id }} bridge={{ bridge_name }}]] = 0) do={
+            /interface bridge vlan add bridge={{ bridge_name }} vlan-ids={{ item.id }}
+            tagged="{{ _tagged | join(',') }}" untagged="{{ _untagged | join(',') }}" }
+          - >-
+            /interface bridge vlan set
+            [find vlan-ids={{ item.id }} bridge={{ bridge_name }}]
+            tagged="{{ _tagged | join(',') }}" untagged="{{ _untagged | join(',') }}"
+            comment="VLAN {{ item.id }} {{ item.name }} — Ansible managed"
+      loop: "{{ switch_vlans }}"
+      loop_control:
+        label: "VLAN {{ item.id }} ({{ item.name }})"
+
+    - name: List VLANs configured on the bridge
+      tags: [vlans]
+      community.routeros.command:
+        commands:
+          # One marked line: the CLI echoes the command back, so only a line
+          # starting with the marker is real output. Skips dynamic (pvid) entries.
+          - >-
+            :local r ""; :foreach i in=[/interface bridge vlan find bridge={{ bridge_name }} !dynamic] do={
+            :set r ($r . [/interface bridge vlan get $i vlan-ids] . ",") }; :put ("VLANIDS:" . $r)
+      register: live_vlans
+      check_mode: false
+
+    - name: Report VLANs not in switch_vlans (left in place)
+      tags: [vlans]
+      vars:
+        _line: "{{ live_vlans.stdout_lines[0] | select('match', '^VLANIDS:') | first | default('VLANIDS:') }}"
+        _unmanaged: >-
+          {{ _line | regex_replace('^VLANIDS:', '') | split(',') | map('trim') | reject('equalto', '')
+             | difference(switch_vlans | map(attribute='id') | map('string') | list) }}
+      when: _unmanaged | length > 0
+      ansible.builtin.debug:
+        msg: "Unmanaged VLANs on {{ bridge_name }}: {{ _unmanaged | join(', ') }} — add to switch_vlans or remove by hand"
+
+    # =================================================================
+    # SERVICE HARDENING (same as provision-vcf.yml)
+    # =================================================================
+
+    - name: Disable insecure services
+      tags: [security]
+      community.routeros.command:
+        commands:
+          - /ip service set {{ item }} disabled=yes
+      loop: "{{ services_disabled }}"
+      loop_control:
+        label: "Disable {{ item }}"
+
+    - name: Enable and configure management services
+      tags: [security]
+      community.routeros.command:
+        commands:
+          - /ip service set {{ item.name }} disabled=no port={{ item.port }}
+      loop: "{{ services_enabled }}"
+      loop_control:
+        label: "{{ item.name }}:{{ item.port }}"
+
+    - name: Create local CA certificate (if needed)
+      tags: [security]
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/certificate find name=local-ca]] = 0) do={
+            /certificate add name=local-ca common-name=local-ca
+            key-usage=key-cert-sign,crl-sign;
+            /certificate sign local-ca name=local-ca }
+
+    - name: Create server certificate (if needed)
+      tags: [security]
+      community.routeros.command:
+        commands:
+          - >-
+            :if ([:len [/certificate find name=local-cert]] = 0) do={
+            /certificate add name=local-cert common-name={{ ansible_host }}
+            key-usage=tls-server days-valid=3650;
+            /certificate sign local-cert ca=local-ca }
+
+    - name: Set HTTPS and API-SSL certificate
+      tags: [security]
+      community.routeros.command:
+        commands:
+          - /ip service set www-ssl certificate=local-cert
+          - /ip service set api-ssl certificate=local-cert
+
+    # =================================================================
+    # SNMP — read-only, management subnet only
+    # =================================================================
+
+    - name: Configure SNMP
+      tags: [snmp]
+      when:
+        - enable_snmp | default(false)
+        - snmp_community_secret is defined
+      no_log: true   # community string
+      community.routeros.command:
+        commands:
+          - /snmp set enabled=yes location="{{ snmp_location }}"
+          - >-
+            /snmp community set [find default=yes] name={{ snmp_community_secret }}
+            addresses={{ snmp_allowed_addresses }} read-access=yes write-access=no
+
+    - name: Warn that SNMP was skipped
+      tags: [snmp]
+      when:
+        - enable_snmp | default(false)
+        - snmp_community_secret is not defined
+      ansible.builtin.debug:
+        msg: "SNMP not configured: snmp_community_secret is unset (host_vars/{{ inventory_hostname }}/secrets.yml)"
+
+    # =================================================================
+    # FINAL BACKUP
+    # =================================================================
+
+    - name: Save post-provision backup
+      tags: [always]
+      community.routeros.command:
+        commands:
+          - /system backup save name=post-provision
+
+    - name: Display provisioning summary
+      tags: [always]
+      ansible.builtin.debug:
+        msg: |
+          L2 provisioning complete for {{ inventory_hostname }} ({{ ansible_host }})
+            Bridge:     {{ bridge_name }} (VLAN filtering, RSTP priority {{ bridge_stp_priority }})
+            Ports:      {{ bridge_ports | join(', ') }}
+            VLANs:      {{ switch_vlans | map(attribute='id') | join(', ') }}
+            Management: {{ management_ip }} on {{ management_interface }} via {{ management_gateway }}
