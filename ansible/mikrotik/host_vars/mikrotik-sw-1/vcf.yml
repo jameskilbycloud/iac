@@ -145,18 +145,14 @@ vlans:
     tagged_groups:
       - hosts
 
+  # DMZ: L2 only on sw-1 since 2026-10-16 — the UniFi is its gateway
+  # (192.168.2.1) and DHCP server, so DMZ traffic is filtered by the UniFi
+  # firewall instead of being routed straight into VCF here.
   - id: 2
     name: DMZ
-    network: "192.168.2.0/24"
     tagged_groups:
       - hosts
       - interswitch
-    dhcp:
-      pool_name: dhcp-dmz-pool
-      server_name: dhcp-dmz
-      range_start: "192.168.2.100"
-      range_end: "192.168.2.200"
-      lease_time: "1h"
 
   # Point-to-point routed transit to the UniFi (.248) over the 10G trunk.
   # Carries the default route and the BGP session; management stays on ether1.
@@ -251,7 +247,6 @@ bgp_peer_address: "192.168.15.248"  # UniFi on the VLAN 15 transit
 bgp_peer_name: "unifi"
 
 bgp_advertise_networks:
-  - "192.168.2.0/24"
   - "192.168.100.0/24"
   - "192.168.101.0/24"
   - "192.168.102.0/24"
