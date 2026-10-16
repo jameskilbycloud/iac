@@ -52,6 +52,8 @@ disable_bandwidth_server: true
 
 # SSH: disallow weak ciphers/MACs/KEX (sha1, 128-bit keys).
 ssh_strong_crypto: true
+# ed25519 host keys since 2026-10-16 (were RSA-2048).
+ssh_host_key_type: ed25519
 
 # Lifetime of the self-signed CA created by the playbooks. RouterOS-signed
 # certs stop validating when their CA expires, so match the server cert.

@@ -24,6 +24,19 @@ default_gateway: "192.168.15.248"   # UniFi on the VLAN 15 transit
 # with a lower MAC would have taken over root.
 bridge_stp_priority: "0x1000"
 
+# Local accounts besides admin. Passwords are never changed by the playbook;
+# one is only needed (password_var, from secrets.yml) to create a missing user.
+user_groups:
+  - name: ha-readonly
+    comment: "Home Assistant MikroTik integration"
+    policy: "read,winbox,web,api,rest-api,!local,!telnet,!ssh,!ftp,!reboot,!write,!policy,!test,!password,!sniff,!sensitive,!romon"
+local_users:
+  - name: ha-monitor
+    group: ha-readonly
+    address: "192.168.4.0/24"   # Home Assistant polls the REST API from 192.168.4.1
+    comment: "Home Assistant"
+    password_var: ha_monitor_password
+
 # Interface groups — referenced by name in vlan tagged_groups
 interface_groups:
   interswitch:
