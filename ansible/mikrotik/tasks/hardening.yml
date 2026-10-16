@@ -1,0 +1,90 @@
+---
+# Service hardening shared by provision-vcf.yml and provision-sw-2.yml.
+# All 'set' or add-if-missing — naturally idempotent.
+#
+# Vars: services_disabled, services_enabled, services_allowed_from,
+#       mgmt_mac_interfaces (per host), disable_bandwidth_server,
+#       ssh_strong_crypto, local_ca_days_valid (group_vars).
+
+- name: Disable insecure services
+  community.routeros.command:
+    commands:
+      - /ip service set {{ item }} disabled=yes
+  loop: "{{ services_disabled }}"
+  loop_control:
+    label: "Disable {{ item }}"
+
+- name: Enable management services, reachable only from management subnets
+  community.routeros.command:
+    commands:
+      - >-
+        /ip service set {{ item.name }} disabled=no port={{ item.port }}
+        available-from="{{ services_allowed_from | default('') }}"
+  loop: "{{ services_enabled }}"
+  loop_control:
+    label: "{{ item.name }}:{{ item.port }}"
+
+# MAC-Winbox/MAC-telnet are layer-2 recovery paths that bypass IP — keep them
+# on the management interface only, not on every port facing other networks.
+- name: Restrict MAC server to the management interface
+  when: mgmt_mac_interfaces is defined
+  vars:
+    # RouterOS array literal: {"ether1";"vlan3-mgmt"}
+    _mgmt_ifs: "{{ '{' ~ (mgmt_mac_interfaces | map('to_json') | join(';')) ~ '}' }}"
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface list find name=MGMT]] = 0) do={
+        /interface list add name=MGMT comment="Management interfaces — Ansible managed" }
+      - >-
+        :foreach i in=[/interface list member find list=MGMT] do={
+        :if ([:len [:find {{ _mgmt_ifs }} [/interface list member get $i interface]]] = 0) do={
+        /interface list member remove $i } }
+      - >-
+        :foreach n in={{ _mgmt_ifs }} do={
+        :if ([:len [/interface list member find list=MGMT interface=$n]] = 0) do={
+        /interface list member add list=MGMT interface=$n } }
+      - /tool mac-server set allowed-interface-list=MGMT
+      - /tool mac-server mac-winbox set allowed-interface-list=MGMT
+
+- name: Disable bandwidth-test server
+  when: disable_bandwidth_server | default(false)
+  community.routeros.command:
+    commands:
+      - /tool bandwidth-server set enabled=no
+
+- name: SSH strong crypto
+  community.routeros.command:
+    commands:
+      - /ip ssh set strong-crypto={{ 'yes' if ssh_strong_crypto | default(false) else 'no' }}
+
+# Factory-default WAN/LAN lists — nothing references them on a switch.
+- name: Remove unused factory interface lists
+  community.routeros.command:
+    commands:
+      - :foreach i in=[/interface list member find where list=WAN or list=LAN] do={ /interface list member remove $i }
+      - :foreach i in=[/interface list find where name=WAN or name=LAN] do={ /interface list remove $i }
+
+- name: Create local CA certificate (if needed)
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/certificate find name=local-ca]] = 0) do={
+        /certificate add name=local-ca common-name=local-ca
+        key-usage=key-cert-sign,crl-sign days-valid={{ local_ca_days_valid | default(3650) }};
+        /certificate sign local-ca name=local-ca }
+
+- name: Create server certificate (if needed)
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/certificate find name=local-cert]] = 0) do={
+        /certificate add name=local-cert common-name={{ ansible_host }}
+        key-usage=tls-server days-valid=3650;
+        /certificate sign local-cert ca=local-ca }
+
+- name: Set HTTPS and API-SSL certificate
+  community.routeros.command:
+    commands:
+      - /ip service set www-ssl certificate=local-cert
+      - /ip service set api-ssl certificate=local-cert

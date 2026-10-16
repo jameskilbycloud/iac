@@ -22,6 +22,7 @@ management_vlan: 3
 management_interface: "vlan3-mgmt"
 management_ip: "192.168.3.2/24"
 management_gateway: "192.168.3.248"
+mgmt_mac_interfaces: ["vlan3-mgmt"]   # MAC-Winbox/telnet only on management
 
 # Bridge — keeps the factory name. sw-1 is root at 0x1000; sw-2 at 0x2000 is
 # the deterministic backup root ahead of the default-priority CSS610s.
@@ -39,9 +40,13 @@ interface_groups:
     - sfp-sfpplus2
     - sfp-sfpplus3
     - sfp-sfpplus4
-  vcf:            # VCF VLANs 100/101 are only carried towards sw-1 and the shed
+  core:           # sw-1 <-> UniFi only — the transit and DMZ have no business
+    - sfp-sfpplus3   # in the shed or the rack
+    - sfp-sfpplus4
+  house_side:     # everything except sw-1 — for VLANs sw-1 doesn't carry
     - sfp-sfpplus1
-    - sfp-sfpplus3
+    - sfp-sfpplus2
+    - sfp-sfpplus4
   native_vlan1:   # VLAN 1 untagged (PVID 1) towards the rack and the house
     - sfp-sfpplus2
     - sfp-sfpplus4
@@ -60,16 +65,19 @@ interface_speed_overrides:
 disabled_interfaces:
   - ether1   # unused 1G copper port
 
-# Bridge VLAN table. `bridge: true` tags the bridge itself (needed for a VLAN
-# with a switch IP on it — management only).
+# Bridge VLAN table. Entries the playbook created ("Ansible managed" comment)
+# are removed when dropped from this list; hand-added ones are only reported.
+# VLAN 20 (unused) and 100/101 (VCF, routed by sw-1 — nothing here needs
+# them at L2) removed 2026-10-16. `bridge: true` tags the bridge itself
+# (needed for a VLAN with a switch IP on it — management only).
 switch_vlans:
   - id: 1
     name: Native
     tagged_groups: [vlan1_tagged]
     untagged_groups: [native_vlan1]
   - id: 2
-    name: DMZ
-    tagged_groups: [uplinks]
+    name: DMZ       # gateway on the UniFi; DMZ VMs sit behind sw-1
+    tagged_groups: [core]
   - id: 3
     name: NetMan
     bridge: true
@@ -79,13 +87,10 @@ switch_vlans:
     tagged_groups: [uplinks]
   - id: 15
     name: Transit   # sw-1 192.168.15.1 <-> UniFi 192.168.15.248
-    tagged_groups: [uplinks]
-  - id: 20
-    name: VLAN20
-    tagged_groups: [uplinks]
+    tagged_groups: [core]
   - id: 24
-    name: IOT
-    tagged_groups: [uplinks]
+    name: IOT       # not on sw-1
+    tagged_groups: [house_side]
   - id: 38
     name: VMware-Management
     tagged_groups: [uplinks]
@@ -101,12 +106,6 @@ switch_vlans:
   - id: 61
     name: iscsi2-Legacy
     tagged_groups: [uplinks]
-  - id: 100
-    name: VCF-Management
-    tagged_groups: [vcf]
-  - id: 101
-    name: VCF-vMotion
-    tagged_groups: [vcf]
 
 # SNMP — read-only v2c, polled from the management subnet. The community
 # string lives in secrets.yml (this repo is public); without it the SNMP task

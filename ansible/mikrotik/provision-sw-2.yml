@@ -16,8 +16,8 @@
 #   - Read-only SNMP restricted to the management subnet
 #
 # Only runs against hosts with switch_role: l2_aggregation (host_vars).
-# VLANs present on the switch but missing from switch_vlans are reported,
-# not removed.
+# VLAN entries this playbook created are removed when dropped from
+# switch_vlans; hand-added ones are reported, not removed.
 #
 # Usage:
 #   ansible-playbook -i inventory.yml provision-sw-2.yml
@@ -251,6 +251,18 @@
       loop_control:
         label: "VLAN {{ item.id }} ({{ item.name }})"
 
+    - name: Remove Ansible-managed VLAN entries dropped from switch_vlans
+      tags: [vlans]
+      vars:
+        _keep: "{{ '{' ~ (switch_vlans | map(attribute='id') | join(';')) ~ '}' }}"
+      community.routeros.command:
+        commands:
+          - >-
+            :local keep {{ _keep }};
+            :foreach i in=[/interface bridge vlan find where bridge={{ bridge_name }} and !dynamic and comment~"Ansible managed"] do={
+            :if ([:len [:find $keep [:tonum [:pick [/interface bridge vlan get $i vlan-ids] 0]]]] = 0) do={
+            /interface bridge vlan remove $i } }
+
     - name: List VLANs configured on the bridge
       tags: [vlans]
       community.routeros.command:
@@ -275,53 +287,15 @@
         msg: "Unmanaged VLANs on {{ bridge_name }}: {{ _unmanaged | join(', ') }} — add to switch_vlans or remove by hand"
 
     # =================================================================
-    # SERVICE HARDENING (same as provision-vcf.yml)
+    # SERVICE HARDENING — tasks/hardening.yml (shared with provision-vcf.yml)
     # =================================================================
 
-    - name: Disable insecure services
+    - name: Service hardening
       tags: [security]
-      community.routeros.command:
-        commands:
-          - /ip service set {{ item }} disabled=yes
-      loop: "{{ services_disabled }}"
-      loop_control:
-        label: "Disable {{ item }}"
-
-    - name: Enable and configure management services
-      tags: [security]
-      community.routeros.command:
-        commands:
-          - /ip service set {{ item.name }} disabled=no port={{ item.port }}
-      loop: "{{ services_enabled }}"
-      loop_control:
-        label: "{{ item.name }}:{{ item.port }}"
-
-    - name: Create local CA certificate (if needed)
-      tags: [security]
-      community.routeros.command:
-        commands:
-          - >-
-            :if ([:len [/certificate find name=local-ca]] = 0) do={
-            /certificate add name=local-ca common-name=local-ca
-            key-usage=key-cert-sign,crl-sign;
-            /certificate sign local-ca name=local-ca }
-
-    - name: Create server certificate (if needed)
-      tags: [security]
-      community.routeros.command:
-        commands:
-          - >-
-            :if ([:len [/certificate find name=local-cert]] = 0) do={
-            /certificate add name=local-cert common-name={{ ansible_host }}
-            key-usage=tls-server days-valid=3650;
-            /certificate sign local-cert ca=local-ca }
-
-    - name: Set HTTPS and API-SSL certificate
-      tags: [security]
-      community.routeros.command:
-        commands:
-          - /ip service set www-ssl certificate=local-cert
-          - /ip service set api-ssl certificate=local-cert
+      ansible.builtin.include_tasks:
+        file: tasks/hardening.yml
+        apply:
+          tags: [security]
 
     # =================================================================
     # SNMP — read-only, management subnet only

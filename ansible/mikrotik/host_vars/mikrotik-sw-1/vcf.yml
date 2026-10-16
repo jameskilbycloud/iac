@@ -16,6 +16,7 @@ enable_ntp_server: true
 management_interface: "ether1"
 management_ip: "192.168.3.1/24"
 management_gateway: "192.168.3.248"
+mgmt_mac_interfaces: ["ether1"]   # MAC-Winbox/telnet only here
 default_gateway: "192.168.15.248"   # UniFi on the VLAN 15 transit
 
 # STP — pin sw-1 as root of the bridged domain (sw-1 + sw-2 + the CSS610s
@@ -25,13 +26,11 @@ bridge_stp_priority: "0x1000"
 
 # Interface groups — referenced by name in vlan tagged_groups
 interface_groups:
-  uplink: []   # qsfp28-4-1 (UniFi gateway LAN trunk) disabled 2026-07-01 — see disabled_interfaces
   interswitch:
-    - qsfp28-1-1   # UniFi gateway + trunk to mikrotik-sw-2 (CRS305) / downstream
-                   # MikroTik fabric. NOTE: the UniFi is reached via THIS port,
-                   # not qsfp28-4-1 — so any VLAN that must reach the gateway
-                   # (e.g. VLAN 60, whose DHCP server lives on the UniFi) has to
-                   # tag `interswitch`, not just `uplink`.
+    - qsfp28-1-1   # Trunk to mikrotik-sw-2 (CRS305), and through it the UniFi
+                   # and the rest of the network. Any VLAN that must reach the
+                   # UniFi (e.g. VLAN 60, whose DHCP server lives there) or
+                   # anything beyond sw-2 has to tag `interswitch`.
   hosts:
     # Port map confirmed by LLDP 2026-10-15. Deliberately NOT mirrored in
     # interface_comments.yml — LLDP labels these live. Static labels are how
@@ -92,25 +91,20 @@ vlans:
     name: Management
     network: "192.168.100.0/24"
     tagged_groups:
-      - uplink
       - hosts
-      - interswitch
 
   - id: 101
     name: vMotion
     network: "192.168.101.0/24"
     mtu: 9212
     tagged_groups:
-      - uplink
       - hosts
-      - interswitch
 
   - id: 102
     name: vSAN
     network: "192.168.102.0/24"
     mtu: 9212
     tagged_groups:
-      - uplink
       - hosts
 
   - id: 103
@@ -118,7 +112,6 @@ vlans:
     network: "192.168.103.0/24"
     mtu: 9212
     tagged_groups:
-      - uplink
       - hosts
 
   - id: 104
@@ -126,14 +119,12 @@ vlans:
     network: "192.168.104.0/24"
     mtu: 9212
     tagged_groups:
-      - uplink
       - hosts
 
   - id: 105
     name: VM-Network
     network: "192.168.105.0/24"
     tagged_groups:
-      - uplink
       - hosts
     dhcp:
       pool_name: dhcp-vm-pool
@@ -146,21 +137,18 @@ vlans:
     name: NSX-Edge-Uplink-1
     network: "192.168.106.0/24"
     tagged_groups:
-      - uplink
       - hosts
 
   - id: 107
     name: NSX-Edge-Uplink-2
     network: "192.168.107.0/24"
     tagged_groups:
-      - uplink
       - hosts
 
   - id: 2
     name: DMZ
     network: "192.168.2.0/24"
     tagged_groups:
-      - uplink
       - hosts
       - interswitch
     dhcp:
@@ -182,7 +170,6 @@ vlans:
     name: NFS-Storage
     mtu: 9212
     tagged_groups:
-      - uplink
       - hosts
       - storage
       - interswitch
@@ -200,7 +187,6 @@ vlans:
     name: VMware-Management   # was "VMwareMGMT" (now also on VLAN 100)
     mtu: 9216
     tagged_groups:
-      - uplink
       - hosts
       - interswitch
 
@@ -208,7 +194,6 @@ vlans:
     name: vMotion-Legacy      # was "vMotion" (now also on VLAN 101)
     mtu: 9216
     tagged_groups:
-      - uplink
       - hosts
       - interswitch
 
@@ -216,21 +201,18 @@ vlans:
     name: vSAN-Legacy         # was "vSAN" (now also on VLAN 102)
     mtu: 9216
     tagged_groups:
-      - uplink
       - hosts
       - interswitch
 
   - id: 3
     name: NetMan-Legacy       # was "NetMan"
     tagged_groups:
-      - uplink
       - hosts
       - interswitch
 
   - id: 4
     name: ServerVLAN-Legacy   # was "ServerVLAN"
     tagged_groups:
-      - uplink
       - hosts
       - interswitch
 
@@ -238,7 +220,6 @@ vlans:
     name: iscsi2-Legacy       # was "iscsi2"; also reaches storage targets
     mtu: 9216
     tagged_groups:
-      - uplink
       - hosts
       - storage
       - interswitch
@@ -260,9 +241,8 @@ holodeck:
   site_a_start: 300         # Site A: 16 consecutive -> VLANs 300-315
   site_b_start: 330         # Site B: 19 consecutive -> VLANs 330-348 (dual-site only)
   mtu: 9216
-  tagged_groups:
+  tagged_groups:   # host-to-host only — sw-2 doesn't carry them, so not interswitch
     - hosts
-    - interswitch
 
 # BGP
 bgp_router_id: "192.168.3.1"
