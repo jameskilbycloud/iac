@@ -1,0 +1,44 @@
+---
+# Local user groups and accounts (besides admin), shared by both
+# provisioning playbooks. Group policy, user group, allowed source address
+# and comment are kept in line every run; passwords are only ever set when a
+# missing user is created (from the secret named by password_var) — an
+# existing user's password is never touched.
+#
+# Vars (host_vars): user_groups, local_users
+
+- name: Ensure user groups
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/user group find name={{ item.name }}]] = 0) do={
+        /user group add name={{ item.name }} policy="{{ item.policy }}" }
+      - >-
+        /user group set [find name={{ item.name }}] policy="{{ item.policy }}"
+        comment="{{ item.comment | default('') }} — Ansible managed"
+  loop: "{{ user_groups | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create missing users (password from secrets)
+  vars:
+    _pw: "{{ lookup('vars', item.password_var, default='') if item.password_var is defined else '' }}"
+  when: _pw | length > 0
+  no_log: true   # password on the command line
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/user find name={{ item.name }}]] = 0) do={
+        /user add name={{ item.name }} group={{ item.group }} password="{{ _pw }}" }
+  loop: "{{ local_users | default([]) }}"
+
+- name: Ensure user group, source address and comment
+  community.routeros.command:
+    commands:
+      - >-
+        /user set [find name={{ item.name }}] group={{ item.group }}
+        address="{{ item.address | default('') }}"
+        comment="{{ item.comment | default('') }} — Ansible managed"
+  loop: "{{ local_users | default([]) }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.group }}, from {{ item.address | default('anywhere') }})"

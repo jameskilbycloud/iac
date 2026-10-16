@@ -297,6 +297,13 @@
         apply:
           tags: [security]
 
+    - name: Local users and groups
+      tags: [security, users]
+      ansible.builtin.include_tasks:
+        file: tasks/users.yml
+        apply:
+          tags: [security, users]
+
     # =================================================================
     # SNMP — read-only, management subnet only
     # =================================================================

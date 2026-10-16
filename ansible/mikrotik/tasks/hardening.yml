@@ -58,6 +58,17 @@
     commands:
       - /ip ssh set strong-crypto={{ 'yes' if ssh_strong_crypto | default(false) else 'no' }}
 
+# Changing the key type regenerates the host key, so clients (this machine,
+# Semaphore) must refresh known_hosts — only happens when the type differs.
+- name: SSH host key type
+  when: ssh_host_key_type is defined
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([/ip ssh get host-key-type] != "{{ ssh_host_key_type }}") do={
+        /ip ssh set host-key-type={{ ssh_host_key_type }};
+        /ip ssh regenerate-host-key }
+
 # Factory-default WAN/LAN lists — nothing references them on a switch.
 - name: Remove unused factory interface lists
   community.routeros.command:
