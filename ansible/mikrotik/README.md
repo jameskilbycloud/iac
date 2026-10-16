@@ -59,6 +59,12 @@ Both provisioning playbooks target `mikrotik_switches` and skip any host whose
 `switch_role` (set in `host_vars/<host>/`) doesn't match, so running one
 without `--limit` can't reconfigure the other switch.
 
+Service hardening is shared by both playbooks (`tasks/hardening.yml`):
+telnet/ftp/http/plaintext API off, SSH/Winbox/HTTPS/API-SSL only from
+`services_allowed_from` (management, Semaphore/Home Assistant and house LAN
+subnets), MAC-Winbox/telnet only on `mgmt_mac_interfaces`, bandwidth-test
+off, SSH strong crypto.
+
 Secrets live in `host_vars/<host>/secrets.yml` (gitignored — see the
 `secrets.yml.example` next to it). sw-2's SNMP community is one of them; the
 SNMP task is skipped if it isn't set.

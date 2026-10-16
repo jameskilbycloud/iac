@@ -36,6 +36,26 @@ services_enabled:
     port: 8729
   - name: www-ssl
     port: 443
+  - name: winbox
+    port: 8291
+
+# Management services only answer from these subnets — without this they
+# listen on every switch IP (e.g. sw-1's DMZ/VM-network gateways).
+#   192.168.3.0/24  switch management (NetMan)
+#   192.168.4.0/24  Semaphore + Home Assistant
+#   192.168.10.0/24 house LAN (admin workstation)
+services_allowed_from: "192.168.3.0/24,192.168.4.0/24,192.168.10.0/24"
+
+# MAC-Winbox / MAC-telnet only on the management interface (per host:
+# mgmt_mac_interfaces). Bandwidth-test server off.
+disable_bandwidth_server: true
+
+# SSH: disallow weak ciphers/MACs/KEX (sha1, 128-bit keys).
+ssh_strong_crypto: true
+
+# Lifetime of the self-signed CA created by the playbooks. RouterOS-signed
+# certs stop validating when their CA expires, so match the server cert.
+local_ca_days_valid: 3650
 
 # SNMP (disabled by default)
 enable_snmp: false

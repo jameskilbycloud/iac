@@ -94,7 +94,8 @@
       when: enable_ntp_server | default(false)
       community.routeros.command:
         commands:
-          - /system ntp server set enabled=yes
+          # No broadcast — clients are configured to poll ntp-1.
+          - /system ntp server set enabled=yes broadcast=no
 
     - name: Configure DNS servers
       tags: [system]
@@ -384,6 +385,8 @@
       loop_control:
         label: "VLAN {{ item.id }} ({{ item.name }})"
 
+    # SVIs only for VLANs the switch routes (has a `network`). L2-only VLANs
+    # are carried by the bridge VLAN table alone.
     - name: Ensure VLAN interfaces exist
       tags: [vlans]
       community.routeros.command:
@@ -394,7 +397,7 @@
             interface={{ bridge_name }}
             {{ 'mtu=' ~ item.mtu if item.mtu is defined else '' }}
             comment="VLAN {{ item.id }} {{ item.name }} — Ansible managed" }
-      loop: "{{ vlans }}"
+      loop: "{{ vlans | selectattr('network', 'defined') | list }}"
       loop_control:
         label: "VLAN {{ item.id }} ({{ item.name }})"
 
@@ -407,9 +410,27 @@
             vlan-id={{ item.id }} interface={{ bridge_name }}
             {{ 'mtu=' ~ item.mtu if item.mtu is defined else '' }}
             comment="VLAN {{ item.id }} {{ item.name }} — Ansible managed"
-      loop: "{{ vlans }}"
+      loop: "{{ vlans | selectattr('network', 'defined') | list }}"
       loop_control:
         label: "VLAN {{ item.id }} ({{ item.name }})"
+
+    # Drops SVIs this playbook created for VLANs that are no longer routed
+    # (L2-only VLANs, or a VLAN whose `network` was removed), together with
+    # any DHCP server and IP bound to them. Hand-made interfaces are left.
+    - name: Remove Ansible-managed SVIs for VLANs that aren't routed
+      tags: [vlans]
+      vars:
+        _routed: "{{ '{' ~ (vlans | selectattr('network', 'defined') | map(attribute='id') | join(';')) ~ '}' }}"
+      community.routeros.command:
+        commands:
+          - >-
+            :local keep {{ _routed }};
+            :foreach i in=[/interface vlan find where interface={{ bridge_name }} and comment~"Ansible managed"] do={
+            :local n [/interface vlan get $i name];
+            :if ([:len [:find $keep [/interface vlan get $i vlan-id]]] = 0) do={
+            :foreach d in=[/ip dhcp-server find interface=$n] do={ /ip dhcp-server remove $d };
+            :foreach a in=[/ip address find interface=$n] do={ /ip address remove $a };
+            /interface vlan remove $i } }
 
     - name: Ensure bridge VLAN entries exist
       tags: [vlans]
@@ -476,6 +497,25 @@
       ansible.builtin.set_fact:
         dhcp_vlans: "{{ vlans | selectattr('dhcp', 'defined') | list }}"
 
+    - name: Remove Ansible-managed DHCP pools and networks no longer wanted
+      tags: [dhcp]
+      vars:
+        _pools: "{{ '{' ~ (dhcp_vlans | map(attribute='dhcp.pool_name') | map('to_json') | join(';')) ~ '}' }}"
+        _nets: "{{ '{' ~ (dhcp_vlans | map(attribute='network') | map('to_json') | join(';')) ~ '}' }}"
+      community.routeros.command:
+        commands:
+          - >-
+            :local keep {{ _nets }};
+            :foreach i in=[/ip dhcp-server network find where comment~"Ansible managed"] do={
+            :if ([:len [:find $keep [/ip dhcp-server network get $i address]]] = 0) do={
+            /ip dhcp-server network remove $i } }
+          - >-
+            :local keep {{ _pools }};
+            :foreach i in=[/ip pool find where comment~"Ansible managed"] do={
+            :if ([:len [:find $keep [/ip pool get $i name]]] = 0) do={
+            :foreach d in=[/ip dhcp-server find address-pool=[/ip pool get $i name]] do={ /ip dhcp-server remove $d };
+            /ip pool remove $i } }
+
     - name: Ensure DHCP pools exist
       tags: [dhcp]
       community.routeros.command:
@@ -539,62 +579,15 @@
         label: "Server {{ item.dhcp.server_name }}"
 
     # =================================================================
-    # SERVICE HARDENING (all use 'set' — naturally idempotent)
+    # SERVICE HARDENING — tasks/hardening.yml (shared with provision-sw-2.yml)
     # =================================================================
 
-    - name: Disable insecure services
+    - name: Service hardening
       tags: [security]
-      community.routeros.command:
-        commands:
-          - /ip service set {{ item }} disabled=yes
-      loop: "{{ services_disabled }}"
-      loop_control:
-        label: "Disable {{ item }}"
-
-    - name: Enable and configure management services
-      tags: [security]
-      community.routeros.command:
-        commands:
-          - /ip service set {{ item.name }} disabled=no port={{ item.port }}
-      loop: "{{ services_enabled }}"
-      loop_control:
-        label: "{{ item.name }}:{{ item.port }}"
-
-    - name: Create local CA certificate (if needed)
-      tags: [security]
-      community.routeros.command:
-        commands:
-          - >-
-            :if ([:len [/certificate find name=local-ca]] = 0) do={
-            /certificate add name=local-ca common-name=local-ca
-            key-usage=key-cert-sign,crl-sign;
-            /certificate sign local-ca name=local-ca }
-      ignore_errors: true
-
-    - name: Create server certificate (if needed)
-      tags: [security]
-      community.routeros.command:
-        commands:
-          - >-
-            :if ([:len [/certificate find name=local-cert]] = 0) do={
-            /certificate add name=local-cert common-name={{ ansible_host }}
-            key-usage=tls-server days-valid=3650;
-            /certificate sign local-cert ca=local-ca }
-      ignore_errors: true
-
-    - name: Set HTTPS certificate
-      tags: [security]
-      community.routeros.command:
-        commands:
-          - /ip service set www-ssl certificate=local-cert
-      ignore_errors: true
-
-    - name: Set API-SSL certificate
-      tags: [security]
-      community.routeros.command:
-        commands:
-          - /ip service set api-ssl certificate=local-cert
-      ignore_errors: true
+      ansible.builtin.include_tasks:
+        file: tasks/hardening.yml
+        apply:
+          tags: [security]
 
     # =================================================================
     # SNMP (optional, uses 'set' — naturally idempotent)
