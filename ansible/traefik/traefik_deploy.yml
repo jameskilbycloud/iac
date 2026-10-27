@@ -156,6 +156,20 @@
         msg: "This playbook only supports Ubuntu/Debian"
       when: ansible_facts['os_family'] not in ['Debian']
 
+    # vars.yml is gitignored, so runs from Semaphore must get these from the
+    # template's environment; fail here rather than halfway through the config.
+    - name: Check required variables are set
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.vars', item, default='') | string | length > 0
+          - lookup('ansible.builtin.vars', item, default='') != 'REPLACE_WITH_YOUR_TOKEN'
+        fail_msg: "Required variable '{{ item }}' is not set (see 'Required variables' at the top of this playbook)"
+        quiet: true
+      loop:
+        - cloudflare_api_token
+        - wildcard_domain
+        - dashboard_admin_password_hash
+
     - name: Set dashboard domain
       ansible.builtin.set_fact:
         dashboard_domain: "{{ traefik_dashboard_domain | default(ansible_facts['hostname'] ~ '-dash.' ~ wildcard_domain) }}"
