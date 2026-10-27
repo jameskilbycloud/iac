@@ -120,7 +120,9 @@
           - docker-buildx-plugin
           - docker-compose-plugin
         state: latest
-      notify: Start Docker service
+      notify:
+        - Start Docker service
+        - Restart containers holding a stale Docker socket
 
     - name: Ensure /etc/docker exists
       ansible.builtin.file:
@@ -148,7 +150,9 @@
         group: root
         mode: '0644'
         validate: dockerd --validate --config-file %s
-      notify: Restart Docker service
+      notify:
+        - Restart Docker service
+        - Restart containers holding a stale Docker socket
       tags: [daemon]
 
     - name: Write host sysctl tuning
@@ -199,6 +203,34 @@
         name: docker
         state: restarted
         enabled: true
+
+    # With live-restore, containers survive a dockerd upgrade or restart, but
+    # dockerd recreates /var/run/docker.sock. Containers that bind-mount the
+    # socket file (Portainer agent, Traefik, socket proxies) keep the old,
+    # dead inode until restarted. Restart only those whose socket no longer
+    # matches the host's. Must stay after "Restart Docker service".
+    - name: Restart containers holding a stale Docker socket
+      ansible.builtin.shell: |
+        {% raw %}
+        set -euo pipefail
+        host_inode=$(stat -L -c %i /var/run/docker.sock)
+        for id in $(docker ps -q); do
+          pid=$(docker inspect -f '{{.State.Pid}}' "$id")
+          docker inspect -f '{{range .Mounts}}{{.Source}} {{.Destination}}{{println}}{{end}}' "$id" |
+            awk '$1 ~ /(^|\/)docker\.sock$/ { print $2 }' |
+            while read -r dest; do
+              if [ "$(stat -L -c %i "/proc/$pid/root$dest" 2>/dev/null)" != "$host_inode" ]; then
+                docker restart "$id" >/dev/null
+                docker inspect -f '{{.Name}}' "$id"
+                break
+              fi
+            done
+        done
+        {% endraw %}
+      args:
+        executable: /bin/bash
+      register: stale_socket_restart
+      changed_when: stale_socket_restart.stdout | length > 0
 
     - name: Apply sysctl settings
       ansible.builtin.command: sysctl -p /etc/sysctl.d/90-homelab-docker.conf
