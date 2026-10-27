@@ -80,8 +80,7 @@ ansible docker_hosts -i inventory.ini -m shell -a "docker compose version"
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `docker_gpg_path` | `/etc/apt/keyrings/docker.gpg` | Path to Docker GPG key |
-| `docker_repo` | Docker official repository | APT repository configuration |
+| `docker_gpg_armored_path` | `/etc/apt/keyrings/docker.asc` | Path to Docker GPG key (referenced by `Signed-By` in `docker.sources`) |
 | `allow_reboot` | `false` | Reboot automatically when `/var/run/reboot-required` exists |
 | `docker_daemon_options` | log caps + live-restore | Keys merged into `/etc/docker/daemon.json` (see below) |
 | `docker_host_sysctls` | `vm.swappiness: 10`, `fs.inotify.max_user_instances: 1024` | Written to `/etc/sysctl.d/90-homelab-docker.conf` |
@@ -174,7 +173,7 @@ Override default variables:
 
 ```bash
 ansible-playbook -i inventory.ini install_docker.yml \
-  -e "docker_gpg_path=/custom/path/docker.gpg"
+  -e "docker_gpg_armored_path=/custom/path/docker.asc"
 ```
 
 ### Limit to Specific Hosts
@@ -210,7 +209,7 @@ GPG error: ... NO_PUBKEY
 **Solution**: The playbook downloads and installs the GPG key automatically. If issues persist, manually verify:
 
 ```bash
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
 ```
 
 ### Repository Not Found
