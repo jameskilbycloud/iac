@@ -46,6 +46,12 @@
     # Dashboard settings (dashboard_domain auto-generated in pre_tasks if traefik_dashboard_domain not set)
     dashboard_admin_user: "{{ traefik_dashboard_user | default('admin') }}"
 
+    # Authelia forwardAuth endpoint, published as the authelia@file middleware that
+    # stacks reference in their labels. Leave empty to skip the middleware.
+    # e.g. http://authelia:9091/api/authz/forward-auth when Authelia runs on this
+    # host, or http://192.168.4.101:9091/api/authz/forward-auth from another host.
+    authelia_forward_auth_address: "{{ traefik_authelia_address | default('') }}"
+
     # Required variables (no defaults - must be provided):
     # - cloudflare_api_token: Cloudflare API token for DNS challenge
     # - wildcard_domain: Base domain for wildcard certificates
@@ -126,6 +132,17 @@
             basicAuth:
               users:
                 - "{{ dashboard_admin_user }}:{{ dashboard_admin_password_hash }}"
+      {% if authelia_forward_auth_address | length > 0 %}
+          authelia:
+            forwardAuth:
+              address: "{{ authelia_forward_auth_address }}"
+              trustForwardHeader: true
+              authResponseHeaders:
+                - "Remote-User"
+                - "Remote-Groups"
+                - "Remote-Name"
+                - "Remote-Email"
+      {% endif %}
         routers:
           traefik-dashboard:
             rule: "Host(`{{ dashboard_domain }}`)"
