@@ -63,6 +63,9 @@
           - gnupg
           - lsb-release
           - python3-debian
+          # Stacks mount NAS shares as "local" volumes with type: cifs; without
+          # mount.cifs, docker fails to start them with "no such device".
+          - cifs-utils
         state: present
         update_cache: yes
 

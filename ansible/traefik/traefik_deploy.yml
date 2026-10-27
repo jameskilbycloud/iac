@@ -176,9 +176,10 @@
       when: wildcard_domain is defined
 
 
+    # Facts are gathered with become, so user_id is root; SUDO_USER is the login user.
     - name: Add user to docker group
       ansible.builtin.user:
-        name: "{{ ansible_facts['user_id'] }}"
+        name: "{{ ansible_facts['env']['SUDO_USER'] | default(ansible_facts['user_id']) }}"
         groups: docker
         append: true
 
