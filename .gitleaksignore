@@ -1,0 +1,8 @@
+# Findings gitleaks should not fail on. One fingerprint per line
+# (commit:file:rule:line), as printed in gitleaks reports.
+
+# TrueNAS API key committed in scripts/truenas/datasets/config.env on 2025-10-01 and
+# removed in 1da7dea the same day. It remains in this public repo's history, so the
+# key must be treated as exposed and rotated in TrueNAS; rewriting history would not
+# un-publish it.
+68d355df1013e09b2587d3738982661a4477239b:scripts/truenas/datasets/config.env:generic-api-key:3
