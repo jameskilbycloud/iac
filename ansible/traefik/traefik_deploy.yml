@@ -98,7 +98,8 @@
             storage: "/acme/acme.json"
             dnsChallenge:
               provider: cloudflare
-              delayBeforeCheck: {{ acme_delay_before_check }}
+              propagation:
+                delayBeforeChecks: {{ acme_delay_before_check }}
               resolvers:
                 {% for resolver in dns_resolvers %}
                 - "{{ resolver }}"
