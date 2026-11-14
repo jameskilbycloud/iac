@@ -14,8 +14,9 @@ on:
           - container-toolkit
           - test-container
           - full-chain
+          - host-driver
       limit:
-        description: "Ansible --limit pattern (host or group). Leave blank for all."
+        description: "Ansible --limit pattern (host or group). Blank = esxi_hosts for host-driver, vgpu_hosts otherwise."
         type: string
         required: false
         default: ""
@@ -100,21 +101,37 @@ jobs:
 
       - name: Resolve playbook list
         id: plan
+        env:
+          INPUT_PLAYBOOK: ${{ inputs.playbook }}
+          INPUT_LIMIT: ${{ inputs.limit }}
         run: |
-          case "${{ inputs.playbook }}" in
+          case "$INPUT_PLAYBOOK" in
             validate)         echo "files=validate_nvidia_vGPU.yml" >> "$GITHUB_OUTPUT" ;;
             drivers)          echo "files=install_nvidia_drivers.yml" >> "$GITHUB_OUTPUT" ;;
             container-toolkit) echo "files=install_nvidia_containertoolkit.yml" >> "$GITHUB_OUTPUT" ;;
             test-container)   echo "files=test_nvidia_container.yml" >> "$GITHUB_OUTPUT" ;;
             full-chain)       echo "files=install_nvidia_drivers.yml install_nvidia_containertoolkit.yml test_nvidia_container.yml validate_nvidia_vGPU.yml" >> "$GITHUB_OUTPUT" ;;
+            # Not part of full-chain: it drains and reboots ESXi hosts
+            host-driver)      echo "files=install_nvidia_esxi_host_driver.yml" >> "$GITHUB_OUTPUT" ;;
           esac
+          # The guest playbooks target hosts: all, and the inventory also holds
+          # the ESXi hosts - default each playbook to its own group.
+          if [ -z "$INPUT_LIMIT" ]; then
+            if [ "$INPUT_PLAYBOOK" = "host-driver" ]; then
+              echo "limit=esxi_hosts" >> "$GITHUB_OUTPUT"
+            else
+              echo "limit=vgpu_hosts" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "limit=$INPUT_LIMIT" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run Ansible playbook(s)
         env:
           ANSIBLE_FORCE_COLOR: "true"
           ANSIBLE_HOST_KEY_CHECKING: "false"
           INVENTORY: ${{ github.workspace }}/${{ inputs.inventory }}
-          LIMIT: ${{ inputs.limit }}
+          LIMIT: ${{ steps.plan.outputs.limit }}
           CHECK: ${{ inputs.check_mode && '--check --diff' || '' }}
           VERB: ${{ inputs.verbosity }}
           EXTRA_VARS: ${{ inputs.extra_vars }}
@@ -146,7 +163,7 @@ jobs:
             echo ""
             echo "- Playbook(s): \`${{ steps.plan.outputs.files }}\`"
             echo "- Inventory: \`${{ inputs.inventory }}\`"
-            echo "- Limit: \`${{ inputs.limit || 'all' }}\`"
+            echo "- Limit: \`${{ steps.plan.outputs.limit }}\`"
             echo "- Check mode: \`${{ inputs.check_mode }}\`"
             echo "- Result: \`${{ job.status }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

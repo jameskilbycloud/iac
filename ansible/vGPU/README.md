@@ -1,6 +1,6 @@
 # NVIDIA vGPU Ansible Playbooks
 
-This directory contains Ansible playbooks for installing and configuring NVIDIA vGPU drivers and container toolkit on Ubuntu hosts.
+This directory contains Ansible playbooks for installing and configuring the NVIDIA vGPU host driver on ESXi hosts, and the vGPU guest driver, licensing and container toolkit on Ubuntu guest VMs.
 
 ## Overview
 
@@ -14,12 +14,17 @@ Five playbooks work together to set up and validate NVIDIA vGPU capabilities:
 
 ## Prerequisites
 
-- Ubuntu Linux hosts with vGPU capability
+- ESXi hosts with an NVIDIA vGPU-capable GPU (see Playbook 0 for the host-side prerequisites)
+- Ubuntu guest VMs with a vGPU profile assigned
 - Ansible control node with SSH access to target hosts
 - NFS share accessible at `nas.jameskilby.cloud:/mnt/pool1/ISO/nvidia` containing:
-  - NVIDIA vGPU driver file: `NVIDIA-Linux-x86_64-535.247.01-grid.run`
-  - License token file: `client_configuration_token_01-16-2026-11-35-14.tok`
+  - NVIDIA vGPU guest driver file: `NVIDIA-Linux-x86_64-595.71.05-grid.run`
+  - License token file: `client_configuration_token_09-14-2026-15-15-53.tok`
 - Docker installed on target hosts (for container toolkit playbook)
+
+The host VIB and the guest driver must come from the same vGPU release. The current pairing is host `595.71.03` with guest `595.71.05` (same 595.71 branch); a mismatched branch is the most common reason a guest fails to bring the vGPU up.
+
+The inventory has two groups: `esxi_hosts` (Playbook 0) and `vgpu_hosts` (Playbooks 1-4). Playbooks 1-4 target `hosts: all`, so pass `--limit vgpu_hosts` (or a host name) when running them against this inventory.
 
 ## Playbook 0: install_nvidia_esxi_host_driver.yml
 
@@ -90,38 +95,41 @@ Installs NVIDIA vGPU drivers, configures licensing, and validates the installati
 
 ### What It Does
 
-1. Installs required build tools and kernel headers
-2. Mounts NFS share containing NVIDIA driver files
-3. Checks if NVIDIA drivers are already installed (idempotent)
-4. Copies and installs the NVIDIA vGPU driver silently
-5. Deploys the license token to `/etc/nvidia/ClientConfigToken/`
-6. Starts and enables the `nvidia-gridd` licensing daemon
-7. Validates that the GPU is properly licensed
+1. Installs build tools, DKMS and kernel headers for the running kernel
+2. Mounts the NFS share containing the driver installer and licence token
+3. Compares the loaded driver version (`modinfo -F version nvidia`) with the version in the installer filename, and skips the install if they match (idempotent)
+4. For an upgrade: stops `nvidia-gridd` and `nvidia-persistenced`, kills processes holding the GPU and unloads the NVIDIA kernel modules, rebooting first if they won't unload
+5. Runs the installer with `--silent --no-cc-version-check --dkms`
+6. For an upgrade: reboots, then rebuilds the DKMS module if the reboot picked up a newer kernel than the one the driver was built against
+7. Verifies the loaded driver matches the target version
+8. Deploys the licence token to `/etc/nvidia/ClientConfigToken/`, restarts and enables `nvidia-gridd`
+9. Fails if `nvidia-smi -q` still reports the GPU as Unlicensed
 
 ### Variables
 
 You can override these in your inventory or via `--extra-vars`:
 
 ```yaml
-nvidia_driver_file: NVIDIA-Linux-x86_64-535.247.01-grid.run
-nvidia_licence_file: client_configuration_token_01-16-2026-11-35-14.tok
-nfs_server: nas.jameskilby.cloud
-nfs_export_path: /mnt/pool1/ISO/nvidia
-nfs_mount_point: /mnt/iso/nvidia
+nvidia_vgpu_driver_file: NVIDIA-Linux-x86_64-595.71.05-grid.run
+nvidia_vgpu_licence_file: client_configuration_token_09-14-2026-15-15-53.tok
+nvidia_vgpu_driver_path: /tmp/<driver file>   # where the installer is copied on the guest
+nvidia_nfs_server: nas.jameskilby.cloud
+nvidia_nfs_export_path: /mnt/pool1/ISO/nvidia
+nvidia_nfs_mount_point: /mnt/iso/nvidia
 ```
 
 ### Usage
 
 ```bash
-# Run against all hosts
-ansible-playbook -i inventory install_nvidia_drivers.yml
+# Run against all guest VMs
+ansible-playbook -i inventory install_nvidia_drivers.yml --limit vgpu_hosts
 
 # Run against specific host
 ansible-playbook -i inventory install_nvidia_drivers.yml --limit hostname
 
 # Override variables
-ansible-playbook -i inventory install_nvidia_drivers.yml \
-  --extra-vars "nvidia_driver_file=NVIDIA-Linux-x86_64-xxx.run"
+ansible-playbook -i inventory install_nvidia_drivers.yml --limit vgpu_hosts \
+  --extra-vars "nvidia_vgpu_driver_file=NVIDIA-Linux-x86_64-xxx-grid.run"
 ```
 
 ### Post-Installation
@@ -190,11 +198,11 @@ Validates that NVIDIA vGPU drivers are properly installed, licensed, and functio
 
 ### What It Does
 
-1. Checks if `/var/lib/nvidia/licensing/` directory exists
-2. Verifies presence of `.tok` license token file
-3. Confirms `nvidia-gridd` service is active
-4. Checks license status via `nvidia-smi -q`
-5. Fails if vGPU is unlicensed
+1. Checks that `nvidia-smi` is installed
+2. Checks that `/etc/nvidia/ClientConfigToken/` exists and contains a `.tok` licence token
+3. Confirms the `nvidia-gridd` service is registered and active
+4. Checks licence status via `nvidia-smi -q`
+5. Fails if the vGPU is unlicensed
 
 ### Usage
 
@@ -204,21 +212,38 @@ ansible-playbook -i inventory validate_nvidia_vGPU.yml
 
 ## Running All Playbooks
 
-For a complete setup and validation on a new host, run all playbooks in order:
+For a complete setup and validation, run all playbooks in order. The host driver goes first: the guest VM needs its vGPU profile (and so the host VIB) before the guest driver can find a GPU.
 
 ```bash
-# 1. Install drivers first
-ansible-playbook -i inventory install_nvidia_drivers.yml
+# 0. Install the host driver on the ESXi hosts (enters maintenance mode, may reboot)
+ansible-playbook -i inventory install_nvidia_esxi_host_driver.yml
+
+# 1. Install the guest driver and licensing
+ansible-playbook -i inventory install_nvidia_drivers.yml --limit vgpu_hosts
 
 # 2. Install container toolkit
-ansible-playbook -i inventory install_nvidia_containertoolkit.yml
+ansible-playbook -i inventory install_nvidia_containertoolkit.yml --limit vgpu_hosts
 
 # 3. Test container GPU access
-ansible-playbook -i inventory test_nvidia_container.yml
+ansible-playbook -i inventory test_nvidia_container.yml --limit vgpu_hosts
 
 # 4. Validate licensing
-ansible-playbook -i inventory validate_nvidia_vGPU.yml
+ansible-playbook -i inventory validate_nvidia_vGPU.yml --limit vgpu_hosts
 ```
+
+## GitHub Actions
+
+`.github/workflows/deploy-vgpu.yml` (**Deploy vGPU**) runs these playbooks on the self-hosted runner via `workflow_dispatch`. Inputs:
+
+| Input | Values |
+|---|---|
+| `playbook` | `validate`, `drivers`, `container-toolkit`, `test-container`, `full-chain` (guest playbooks 1-4), `host-driver` (Playbook 0) |
+| `limit` | Host or group. Blank defaults to `esxi_hosts` for `host-driver` and `vgpu_hosts` for everything else |
+| `inventory` | Defaults to `ansible/vGPU/inventory` |
+| `check_mode` | Dry run with `--check --diff` |
+| `verbosity`, `extra_vars` | Passed through to `ansible-playbook` |
+
+`host-driver` is deliberately not part of `full-chain`: it drains and reboots ESXi hosts, so it only runs when chosen explicitly. The runner needs SSH key access to the ESXi hosts (see Playbook 0 prerequisites).
 
 ## Using Docker with GPU
 
@@ -286,10 +311,10 @@ journalctl -u docker -f
 
 ## Notes
 
-- The driver installation playbook is idempotent - it checks if drivers are already installed
-- Both playbooks require root/sudo access (`become: yes/true`)
+- Both driver playbooks are idempotent - they compare the installed version with the target and skip if they match
+- The guest playbooks require root/sudo access (`become: yes/true`); the host driver playbook runs as root over SSH
 - NFS mount uses optimized settings for large file transfers
-- The driver installer runs with `--silent --no-cc-version-check` flags
+- The guest driver installer runs with `--silent --no-cc-version-check --dkms` flags
 - A 30-second pause is included after starting nvidia-gridd to allow license activation
 
 ## Files Created/Modified
