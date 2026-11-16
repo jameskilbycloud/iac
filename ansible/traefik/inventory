@@ -5,9 +5,40 @@ all:
       hosts:
         blogtest3:
           ansible_host: 192.168.4.63
+
+        # Primary Docker host: aistack, Stash, Plex, Immich, intake-filer.
+        uk-bhr-p-doc-1:
+          ansible_host: uk-bhr-p-doc-1.jameskilby.cloud
+          traefik_dashboard_middleware: authelia@file
+          # Authelia runs on doc-2.
+          traefik_authelia_address: "http://192.168.4.90:9091/api/authz/forward-auth"
+          # Ollama for doc-2 stacks (paperless-gpt, hoarder) that can't send the
+          # aistack-auth basic-auth credentials: requests from doc-2 skip the
+          # password; everyone else still matches the aistack-ollama router.
+          traefik_extra_routers:
+            ollama-lan:
+              rule: "Host(`ollama.jameskilby.cloud`) && ClientIP(`192.168.4.90/32`)"
+              priority: 1000
+              entryPoints: [websecure]
+              service: ollama-lan
+              tls:
+                certResolver: cloudflare
+          traefik_extra_services:
+            ollama-lan:
+              loadBalancer:
+                servers:
+                  - url: "http://aistack-ollama:11434"
+
+        # Arr stack, Authelia, Paperless, Karakeep, Beszel hub.
+        uk-bhr-p-doc-2:
+          ansible_host: uk-bhr-p-doc-2.jameskilby.cloud
+          traefik_authelia_address: "http://authelia:9091/api/authz/forward-auth"
+
       vars:
         ansible_user: w20kilja
         ansible_become: true
         ansible_become_method: sudo
         ansible_python_interpreter: /usr/bin/python3
         ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+        # The nginx-test sidecar is for fresh hosts only.
+        traefik_deploy_test_service: false
