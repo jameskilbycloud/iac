@@ -7,7 +7,7 @@
   vars:
     ansible_python_interpreter: /usr/bin/python3
     # Traefik container settings - override via inventory, group_vars, or --extra-vars
-    traefik_image: "{{ traefik_docker_image | default('traefik:v3.6.2') }}"
+    traefik_image: "{{ traefik_docker_image | default('traefik:v3.7.19') }}"
     traefik_container_name: "{{ traefik_name | default('traefik') }}"
     traefik_config_dir: "{{ traefik_config_path | default('/etc/traefik') }}"
     traefik_cert_dir: "{{ traefik_acme_path | default('/etc/traefik/acme') }}"
@@ -51,6 +51,22 @@
     # e.g. http://authelia:9091/api/authz/forward-auth when Authelia runs on this
     # host, or http://192.168.4.101:9091/api/authz/forward-auth from another host.
     authelia_forward_auth_address: "{{ traefik_authelia_address | default('') }}"
+    # Cap on the forwardAuth response body Traefik will buffer (bytes). Authelia's
+    # replies are a few KB; the limit guards against memory exhaustion.
+    authelia_max_response_body: "{{ traefik_authelia_max_response_body | default(1048576) }}"
+
+    # Middleware on the dashboard router: dashboard-auth (basic auth) or authelia@file.
+    dashboard_middleware: "{{ traefik_dashboard_middleware | default('dashboard-auth') }}"
+
+    # Request headers whose name aliases a managed one (X_Auth_User for X-Auth-User):
+    # keep | delete | reject. delete stops clients spoofing Authelia's Remote-* headers
+    # to backends that read them as CGI-style variables (Django, PHP).
+    alias_headers_strategy: "{{ traefik_alias_headers_strategy | default('delete') }}"
+
+    # Host-specific routers and services merged into dynamic.yml, as mappings in
+    # Traefik's own shape, e.g. traefik_extra_routers: {name: {rule: ..., service: ...}}.
+    extra_routers: "{{ traefik_extra_routers | default({}) }}"
+    extra_services: "{{ traefik_extra_services | default({}) }}"
 
     # Required variables (no defaults - must be provided):
     # - cloudflare_api_token: Cloudflare API token for DNS challenge
@@ -69,8 +85,15 @@
                 to: websecure
                 scheme: https
                 permanent: true
+            aliasHeadersStrategy: {{ alias_headers_strategy }}
         websecure:
           address: ":{{ traefik_port_websecure }}"
+          http:
+            aliasHeadersStrategy: {{ alias_headers_strategy }}
+            encodedCharacters:
+              # No backend needs a NUL byte in a path; denying it also tells
+              # Traefik the encoded-character options have been reviewed.
+              allowEncodedNullCharacter: false
           transport:
             respondingTimeouts:
               # readTimeout covers reading the whole request including the body,
@@ -79,6 +102,13 @@
               # disable the limit entirely.
               readTimeout: "{{ traefik_read_timeout | default('3600s') }}"
               idleTimeout: "{{ traefik_idle_timeout | default('180s') }}"
+
+        # Internal entry point for ping (health check) and the API; Traefik
+        # creates it on :8080 by default. Declared only to set the header strategy.
+        traefik:
+          address: ":8080"
+          http:
+            aliasHeadersStrategy: {{ alias_headers_strategy }}
 
       # Provider configuration
       providers:
@@ -138,6 +168,7 @@
             forwardAuth:
               address: "{{ authelia_forward_auth_address }}"
               trustForwardHeader: true
+              maxResponseBodySize: {{ authelia_max_response_body }}
               authResponseHeaders:
                 - "Remote-User"
                 - "Remote-Groups"
@@ -153,8 +184,12 @@
             tls:
               certResolver: cloudflare
             middlewares:
-              - dashboard-auth
-          
+              - {{ dashboard_middleware }}
+      {% for name, router in extra_routers.items() %}
+          {{ name }}:
+            {{ router | to_nice_yaml(indent=2) | indent(6) | trim }}
+      {% endfor %}
+
           # Wildcard certificate request router
           wildcard-cert:
             rule: "Host(`{{ wildcard_domain }}`)"
@@ -167,6 +202,13 @@
                 - main: {{ wildcard_domain }}
                   sans:
                     - "*.{{ wildcard_domain }}"
+      {% if extra_services | length > 0 %}
+        services:
+      {% for name, svc in extra_services.items() %}
+          {{ name }}:
+            {{ svc | to_nice_yaml(indent=2) | indent(6) | trim }}
+      {% endfor %}
+      {% endif %}
 
   pre_tasks:
     - name: Check if running on supported OS

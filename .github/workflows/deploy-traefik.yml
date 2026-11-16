@@ -22,12 +22,12 @@ on:
         description: "Traefik image tag to deploy"
         type: string
         required: false
-        default: "traefik:v3.6.2"
+        default: "traefik:v3.7.19"
       deploy_test_service:
         description: "Deploy the nginx-test sidecar (set false in production)"
         type: boolean
         required: false
-        default: true
+        default: false
       check_mode:
         description: "Dry-run with --check (no changes applied)"
         type: boolean

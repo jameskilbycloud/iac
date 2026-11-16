@@ -336,3 +336,17 @@ for cert in data['cloudflare']['Certificates']:
 ## License
 
 Use according to your organization's policies.
+
+## Production hosts (doc-1, doc-2)
+
+`inventory` holds `uk-bhr-p-doc-1` and `uk-bhr-p-doc-2`. Their host differences are inventory variables, so a run reproduces the live config:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `traefik_authelia_address` | empty (no middleware) | Authelia forwardAuth URL for the `authelia@file` middleware |
+| `traefik_authelia_max_response_body` | `1048576` | Largest forwardAuth reply Traefik buffers (bytes) |
+| `traefik_dashboard_middleware` | `dashboard-auth` | Middleware on the dashboard router (doc-1 uses `authelia@file`) |
+| `traefik_alias_headers_strategy` | `delete` | Drops headers that alias managed ones (`Remote_User` for `Remote-User`) |
+| `traefik_extra_routers` / `traefik_extra_services` | `{}` | Host-specific routers and services, in Traefik's own shape |
+
+The playbook rewrites `traefik.yml` and `dynamic.yml` on every run. Add a route by hand on a host and it disappears on the next run, so put it in the inventory instead. Preview a run with `--check --diff --limit <host>`.
