@@ -355,7 +355,7 @@ The playbook rewrites `traefik.yml` and `dynamic.yml` on every run. Add a route 
 
 ### Docker socket proxy
 
-The playbook also runs `docker-socket-proxy` on each host. It allows only read requests (`POST=0`) for containers, networks, events, info and version. Other readers use it instead of mounting `/var/run/docker.sock`:
+The playbook also runs `docker-socket-proxy` on each host. It allows only read requests (`POST=0`) for containers, images, networks, events, info and version. Other readers use it instead of mounting `/var/run/docker.sock`:
 
 - containers on a bridge network join the external `socket-proxy` network and use `tcp://docker-socket-proxy:2375` (AutoKuma)
 - host-network containers use `tcp://127.0.0.1:2375` (Beszel agent, via `DOCKER_HOST`)

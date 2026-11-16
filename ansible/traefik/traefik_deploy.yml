@@ -309,10 +309,12 @@
         env:
           # GET-only API sections. POST=0 blocks every write (create, exec, stop).
           # CONTAINERS: list/inspect/stats; NETWORKS: Traefik's container IPs;
-          # INFO: Beszel host details. EVENTS, PING and VERSION are on by default.
+          # INFO and IMAGES: Beszel host and container details. EVENTS, PING and
+          # VERSION are on by default.
           CONTAINERS: "1"
           NETWORKS: "1"
           INFO: "1"
+          IMAGES: "1"
           EVENTS: "1"
           PING: "1"
           VERSION: "1"
