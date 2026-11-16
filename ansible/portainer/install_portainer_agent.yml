@@ -5,7 +5,7 @@
 
   vars:
     ansible_python_interpreter: /usr/bin/python3
-    portainer_agent_image: "portainer/agent:2.41.0"
+    portainer_agent_image: "portainer/agent:2.45.3"
     container_name: "portainer_agent"
     host_port: 9001
 
