@@ -271,7 +271,7 @@ docker inspect traefik | grep -A 10 Health
 
 - **Cloudflare Token**: Store securely, use Ansible Vault for production
 - **Dashboard Password**: Use strong password and bcrypt hashing
-- **Docker Socket**: Mounted read-only to limit container permissions
+- **Docker Socket**: Traefik reads the Docker API through `docker-socket-proxy` (GET only, on the internal `socket-proxy` network), never the raw socket
 - **ACME Storage**: Restricted to root:root with 0600 permissions
 - **Network Isolation**: Services must be on traefik network to be exposed
 
@@ -348,5 +348,16 @@ Use according to your organization's policies.
 | `traefik_dashboard_middleware` | `dashboard-auth` | Middleware on the dashboard router (doc-1 uses `authelia@file`) |
 | `traefik_alias_headers_strategy` | `delete` | Drops headers that alias managed ones (`Remote_User` for `Remote-User`) |
 | `traefik_extra_routers` / `traefik_extra_services` | `{}` | Host-specific routers and services, in Traefik's own shape |
+| `traefik_socket_proxy_image` | `tecnativa/docker-socket-proxy:v0.5.0` | Read-only Docker API proxy |
+| `traefik_socket_proxy_host_port` | `127.0.0.1:2375` | Loopback port for host-network readers (Beszel agent) |
 
 The playbook rewrites `traefik.yml` and `dynamic.yml` on every run. Add a route by hand on a host and it disappears on the next run, so put it in the inventory instead. Preview a run with `--check --diff --limit <host>`.
+
+### Docker socket proxy
+
+The playbook also runs `docker-socket-proxy` on each host. It allows only read requests (`POST=0`) for containers, networks, events, info and version. Other readers use it instead of mounting `/var/run/docker.sock`:
+
+- containers on a bridge network join the external `socket-proxy` network and use `tcp://docker-socket-proxy:2375` (AutoKuma)
+- host-network containers use `tcp://127.0.0.1:2375` (Beszel agent, via `DOCKER_HOST`)
+
+The Portainer agent keeps the raw socket because it needs write access.
