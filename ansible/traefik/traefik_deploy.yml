@@ -13,6 +13,15 @@
     traefik_cert_dir: "{{ traefik_acme_path | default('/etc/traefik/acme') }}"
     traefik_network: "{{ traefik_docker_network | default('traefik') }}"
 
+    # Docker socket proxy: read-only, filtered Docker API for Traefik and other
+    # readers (Beszel agent, AutoKuma) so none of them mounts the raw socket.
+    # Its network is internal, so only containers that join it can reach the API;
+    # host-network containers (Beszel agent) use the loopback port instead.
+    socket_proxy_image: "{{ traefik_socket_proxy_image | default('tecnativa/docker-socket-proxy:v0.5.0') }}"
+    socket_proxy_name: "{{ traefik_socket_proxy_name | default('docker-socket-proxy') }}"
+    socket_proxy_network: "{{ traefik_socket_proxy_network | default('socket-proxy') }}"
+    socket_proxy_host_port: "{{ traefik_socket_proxy_host_port | default('127.0.0.1:2375') }}"
+
     # Ports
     traefik_port_web: "{{ traefik_http_port | default(80) }}"
     traefik_port_websecure: "{{ traefik_https_port | default(443) }}"
@@ -113,7 +122,7 @@
       # Provider configuration
       providers:
         docker:
-          endpoint: "unix:///var/run/docker.sock"
+          endpoint: "tcp://{{ socket_proxy_name }}:2375"
           exposedByDefault: false
           network: "{{ traefik_network }}"
           watch: true
@@ -285,6 +294,45 @@
       ansible.builtin.debug:
         msg: "Traefik network created: {{ network_result.network.Name }}"
 
+    - name: Create internal Docker network for the socket proxy
+      community.docker.docker_network:
+        name: "{{ socket_proxy_network }}"
+        internal: true
+        state: present
+
+    - name: Deploy Docker socket proxy
+      community.docker.docker_container:
+        name: "{{ socket_proxy_name }}"
+        image: "{{ socket_proxy_image }}"
+        restart_policy: unless-stopped
+        state: started
+        env:
+          # GET-only API sections. POST=0 blocks every write (create, exec, stop).
+          # CONTAINERS: list/inspect/stats; NETWORKS: Traefik's container IPs;
+          # INFO and IMAGES: Beszel host and container details. EVENTS, PING and
+          # VERSION are on by default.
+          CONTAINERS: "1"
+          NETWORKS: "1"
+          INFO: "1"
+          IMAGES: "1"
+          EVENTS: "1"
+          PING: "1"
+          VERSION: "1"
+          POST: "0"
+        volumes:
+          - "/var/run/docker.sock:/var/run/docker.sock:ro"
+        # Loopback only. An internal network can't publish ports, so the default
+        # bridge carries this one.
+        ports:
+          - "{{ socket_proxy_host_port }}:2375"
+        networks:
+          - name: bridge
+          - name: "{{ socket_proxy_network }}"
+        log_driver: json-file
+        log_options:
+          max-size: "{{ log_max_size }}"
+          max-file: "{{ log_max_files }}"
+
     - name: Write Traefik static configuration
       ansible.builtin.copy:
         content: "{{ traefik_static_config }}"
@@ -334,7 +382,6 @@
               - "{{ traefik_config_dir }}/traefik.yml:/etc/traefik/traefik.yml:ro"
               - "{{ traefik_config_dir }}/dynamic.yml:/etc/traefik/dynamic.yml:ro"
               - "{{ traefik_cert_dir }}:/acme"
-              - "/var/run/docker.sock:/var/run/docker.sock:ro"
             labels:
               traefik.enable: "true"
               traefik.http.routers.traefik.rule: "Host(`{{ dashboard_domain }}`)"
@@ -343,6 +390,7 @@
               traefik.http.routers.traefik.middlewares: "dashboard-auth@file"
             networks:
               - name: "{{ traefik_network }}"
+              - name: "{{ socket_proxy_network }}"
             log_driver: json-file
             log_options:
               max-size: "{{ log_max_size }}"
