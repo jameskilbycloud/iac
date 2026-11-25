@@ -267,6 +267,12 @@ bgp_advertise_networks:
   - "192.168.104.0/24"
   - "192.168.105.0/24"
 
+# Blocks passed on to the UniFi together with anything inside them
+# (`dst in`, not `dst ==`): routes the NSX Edges advertise from the VPC
+# external block can be more specific than the /24 (e.g. /32 external IPs).
+bgp_advertise_blocks:
+  - "192.168.110.0/24"   # NTNX1 VPC external IP block (learned from the NSX Edges)
+
 # eBGP to the NSX Edges of the NTNX1 VCF lab (Tier-0 ntnx1-m01-t0, AS 65100,
 # edge-1a .2 / edge-1b .3 on the VLAN 106 and 107 uplinks; the .1 SVIs above).
 # The edges get only a default route (default-originate, nsx-edge-out accepts
