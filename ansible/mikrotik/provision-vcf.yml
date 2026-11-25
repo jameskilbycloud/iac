@@ -784,6 +784,7 @@
               local.address={{ bgp_local_address }}
               local.role=ibgp
               output.filter-chain={{ bgp_output_filter }}
+              output.nexthop-choice=force-self
               input.filter={{ bgp_input_filter }}
               disabled=no
           when: bgp_connections.result | selectattr('name', 'equalto', bgp_peer_name) | list | length == 0
@@ -807,6 +808,7 @@
               local.address={{ bgp_local_address }}
               local.role=ibgp
               output.filter-chain={{ bgp_output_filter }}
+              output.nexthop-choice=force-self
               input.filter={{ bgp_input_filter }}
               disabled=no
           when: bgp_connections.result | selectattr('name', 'equalto', bgp_peer_name) | list | length > 0
@@ -856,9 +858,11 @@
           ansible.builtin.set_fact:
             bgp_out_needs_rebuild: >-
               {{
-                (bgp_out_rule_count.stdout_lines[0] | last | trim | int) != (bgp_advertise_networks | length + 1)
+                (bgp_out_rule_count.stdout_lines[0] | last | trim | int)
+                  != (bgp_advertise_networks | length + bgp_advertise_blocks | default([]) | length + 1)
                 or
-                (bgp_out_advertise_count.stdout_lines[0] | last | trim | int) != (bgp_advertise_networks | length)
+                (bgp_out_advertise_count.stdout_lines[0] | last | trim | int)
+                  != (bgp_advertise_networks | length + bgp_advertise_blocks | default([]) | length)
               }}
 
         - name: Rebuild BGP output filter rules
@@ -880,6 +884,17 @@
                     rule="if (dst == {{ item }}) { accept }"
                     comment="Advertise {{ item }} - Ansible managed"
               loop: "{{ bgp_advertise_networks }}"
+              loop_control:
+                label: "Advertise {{ item }}"
+
+            - name: Add BGP output filter — advertise blocks (and more-specifics)
+              community.routeros.command:
+                commands:
+                  - >-
+                    /routing filter rule add chain={{ bgp_output_filter }}
+                    rule="if (dst in {{ item }}) { accept }"
+                    comment="Advertise {{ item }} and more-specifics - Ansible managed"
+              loop: "{{ bgp_advertise_blocks | default([]) }}"
               loop_control:
                 label: "Advertise {{ item }}"
 
