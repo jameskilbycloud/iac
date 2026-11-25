@@ -266,3 +266,19 @@ bgp_advertise_networks:
   - "192.168.103.0/24"
   - "192.168.104.0/24"
   - "192.168.105.0/24"
+
+# eBGP to the NSX Edges of the NTNX1 VCF lab (Tier-0 ntnx1-m01-t0, AS 65100,
+# edge-1a .2 / edge-1b .3 on the VLAN 106 and 107 uplinks; the .1 SVIs above).
+# The edges get only a default route (default-originate, nsx-edge-out accepts
+# 0.0.0.0/0 only) and sw-1 accepts only nsx_edge_accept_networks from them.
+# See vcf-91-in-box README, Day 2 step 7.
+nsx_edge_remote_as: 65100
+nsx_edge_in_filter: "nsx-edge-in"
+nsx_edge_out_filter: "nsx-edge-out"
+nsx_edge_accept_networks:
+  - "192.168.110.0/24"   # NTNX1 VPC external IP block
+nsx_edge_bgp_peers:
+  - { name: ntnx1-edge-1a-106, local: "192.168.106.1", remote: "192.168.106.2" }
+  - { name: ntnx1-edge-1b-106, local: "192.168.106.1", remote: "192.168.106.3" }
+  - { name: ntnx1-edge-1a-107, local: "192.168.107.1", remote: "192.168.107.2" }
+  - { name: ntnx1-edge-1b-107, local: "192.168.107.1", remote: "192.168.107.3" }

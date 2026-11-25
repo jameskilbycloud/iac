@@ -924,6 +924,139 @@
                     comment="Default deny inbound - Ansible managed"
 
     # =================================================================
+    # NSX EDGE eBGP — sw-1 side of the VCF Tier-0 uplink sessions
+    # =================================================================
+    # Only on hosts that define nsx_edge_bgp_peers (sw-1). Filters first, so
+    # a new session never comes up unfiltered. Filters are rebuilt only when
+    # their rule count is off (as for the UniFi filters above) to avoid flaps.
+
+    - name: Configure NSX Edge eBGP
+      tags: [bgp, nsx_edge_bgp]
+      when:
+        - enable_bgp | default(false)
+        - nsx_edge_bgp_peers | default([]) | length > 0
+      block:
+        - name: Count existing NSX Edge filter rules
+          community.routeros.command:
+            commands:
+              - :put [:len [/routing filter rule find where chain={{ nsx_edge_in_filter }}]]
+              - :put [:len [/routing filter rule find where chain={{ nsx_edge_out_filter }}]]
+          register: nsx_edge_rule_count
+          check_mode: false
+
+        - name: Rebuild NSX Edge input filter (accept the VPC external block only)
+          when: (nsx_edge_rule_count.stdout_lines[0] | last | trim | int) != (nsx_edge_accept_networks | length + 1)
+          block:
+            - name: Clear NSX Edge input filter rules
+              community.routeros.command:
+                commands:
+                  - >-
+                    :do { :foreach i in=[/routing filter rule find
+                    where chain={{ nsx_edge_in_filter }}] do={
+                    /routing filter rule remove $i } } on-error={}
+
+            - name: Add NSX Edge input filter — accept networks
+              community.routeros.command:
+                commands:
+                  - >-
+                    /routing filter rule add chain={{ nsx_edge_in_filter }}
+                    rule="if (dst in {{ item }}) { accept }"
+                    comment="Accept {{ item }} from the NSX Edges - Ansible managed"
+              loop: "{{ nsx_edge_accept_networks }}"
+              loop_control:
+                label: "Accept {{ item }}"
+
+            - name: Add NSX Edge input filter — default reject
+              community.routeros.command:
+                commands:
+                  - >-
+                    /routing filter rule add chain={{ nsx_edge_in_filter }} rule=reject
+                    comment="Default deny from the NSX Edges - Ansible managed"
+
+        - name: Rebuild NSX Edge output filter (default route only)
+          when: (nsx_edge_rule_count.stdout_lines[1] | last | trim | int) != 2
+          community.routeros.command:
+            commands:
+              - >-
+                :do { :foreach i in=[/routing filter rule find
+                where chain={{ nsx_edge_out_filter }}] do={
+                /routing filter rule remove $i } } on-error={}
+              - >-
+                /routing filter rule add chain={{ nsx_edge_out_filter }}
+                rule="if (dst == 0.0.0.0/0) { accept }"
+                comment="Default route to the NSX Edges - Ansible managed"
+              - >-
+                /routing filter rule add chain={{ nsx_edge_out_filter }} rule=reject
+                comment="Default deny to the NSX Edges - Ansible managed"
+
+        - name: Read BGP connections for the NSX Edge peers
+          community.routeros.api_info:
+            hostname: "{{ ansible_host }}"
+            username: "{{ ansible_user }}"
+            password: "{{ mikrotik_api_password }}"
+            tls: true
+            port: 8729
+            validate_certs: false
+            path: routing bgp connection
+          register: nsx_edge_connections
+
+        # No template: bgp-vcf redistributes connected routes, which the edges
+        # must not get. They only need the default route.
+        - name: Create NSX Edge BGP connections
+          community.routeros.api:
+            hostname: "{{ ansible_host }}"
+            username: "{{ ansible_user }}"
+            password: "{{ mikrotik_api_password }}"
+            tls: true
+            port: 8729
+            validate_certs: false
+            path: routing bgp connection
+            add: >-
+              name={{ item.name }}
+              instance=default
+              as={{ bgp_as }}
+              remote.address={{ item.remote }}
+              remote.as={{ nsx_edge_remote_as }}
+              local.address={{ item.local }}
+              local.role=ebgp
+              input.filter={{ nsx_edge_in_filter }}
+              output.filter-chain={{ nsx_edge_out_filter }}
+              output.default-originate=always
+              comment="NSX Edge eBGP {{ item.name }} - Ansible managed"
+              disabled=no
+          loop: "{{ nsx_edge_bgp_peers }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when: nsx_edge_connections.result | selectattr('name', 'equalto', item.name) | list | length == 0
+
+        - name: Update NSX Edge BGP connections
+          community.routeros.api:
+            hostname: "{{ ansible_host }}"
+            username: "{{ ansible_user }}"
+            password: "{{ mikrotik_api_password }}"
+            tls: true
+            port: 8729
+            validate_certs: false
+            path: routing bgp connection
+            update: >-
+              .id={{ (nsx_edge_connections.result | selectattr('name', 'equalto', item.name) | first)['.id'] }}
+              instance=default
+              as={{ bgp_as }}
+              remote.address={{ item.remote }}
+              remote.as={{ nsx_edge_remote_as }}
+              local.address={{ item.local }}
+              local.role=ebgp
+              input.filter={{ nsx_edge_in_filter }}
+              output.filter-chain={{ nsx_edge_out_filter }}
+              output.default-originate=always
+              comment="NSX Edge eBGP {{ item.name }} - Ansible managed"
+              disabled=no
+          loop: "{{ nsx_edge_bgp_peers }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when: nsx_edge_connections.result | selectattr('name', 'equalto', item.name) | list | length > 0
+
+    # =================================================================
     # FINAL BACKUP
     # =================================================================
 
@@ -944,4 +1077,5 @@
             DHCP:       {{ dhcp_vlans | default([]) | map(attribute='name') | join(', ') | default('disabled') }}
             BGP:        {{ 'AS ' ~ bgp_as ~ ' -> ' ~ bgp_peer_address ~ ' (' ~ bgp_peer_name ~ ')' if enable_bgp | default(false) else 'disabled' }}
             BGP filter: {{ 'unchanged' if not (bgp_out_needs_rebuild | default(false) | bool) else 'rebuilt' }}
+            NSX Edges:  {{ nsx_edge_bgp_peers | default([]) | map(attribute='name') | join(', ') | default('none', true) }}
             Gateway:    {{ default_gateway | default(management_gateway) | default('none') }}
