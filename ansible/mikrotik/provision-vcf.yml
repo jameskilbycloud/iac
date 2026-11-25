@@ -784,7 +784,7 @@
               local.address={{ bgp_local_address }}
               local.role=ibgp
               output.filter-chain={{ bgp_output_filter }}
-              output.nexthop-choice=force-self
+              nexthop-choice=force-self
               input.filter={{ bgp_input_filter }}
               disabled=no
           when: bgp_connections.result | selectattr('name', 'equalto', bgp_peer_name) | list | length == 0
@@ -808,7 +808,7 @@
               local.address={{ bgp_local_address }}
               local.role=ibgp
               output.filter-chain={{ bgp_output_filter }}
-              output.nexthop-choice=force-self
+              nexthop-choice=force-self
               input.filter={{ bgp_input_filter }}
               disabled=no
           when: bgp_connections.result | selectattr('name', 'equalto', bgp_peer_name) | list | length > 0
